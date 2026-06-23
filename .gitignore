@@ -1,0 +1,16 @@
+node_modules
+dist
+.DS_Store
+*.local
+.vite
+
+# claude code harness
+.claude/scheduled_tasks.lock
+
+# test artifacts
+test-results
+playwright-report
+blob-report
+.playwright
+coverage
+.playwright-mcp/

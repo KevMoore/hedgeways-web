@@ -1,0 +1,25 @@
+{
+  "name": "hedgeways",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "deploy": "pnpm build && cp dist/index.html dist/200.html && surge ./dist hedgeways.surge.sh"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "gsap": "^3.15.0"
+  }
+}
