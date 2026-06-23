@@ -1,7 +1,7 @@
 import { chooseAiMove } from "../game/ai";
 import { isPalindrome, orient } from "../game/board";
 import { COLOUR_HEX, COLOUR_HEX_DARK, MAX_LAY } from "../game/constants";
-import { Game, type GameConfig } from "../game/game";
+import { Game, type GameConfig, type GameSnapshot } from "../game/game";
 import { generateMoves } from "../game/moves";
 import { validateMove } from "../game/placement";
 import type { Cell, Move, Orientation, PlacedTile, Tile } from "../game/types";
@@ -10,6 +10,13 @@ import { sfx } from "../audio";
 import { Scene } from "../render/scene";
 import { callout, confetti } from "./effects";
 import { showHowTo } from "./howto";
+import { clearActive, saveActive } from "../game/persistence";
+
+export interface GameUiOptions {
+  onQuit?: () => void;
+  onRestart?: (config: GameConfig) => void;
+  restore?: GameSnapshot;
+}
 
 type OriSpec = [Orientation, boolean];
 const ALL_ORI: OriSpec[] = [
@@ -34,11 +41,15 @@ export class GameUI {
   private placementByCell = new Map<string, PlacedTile>();
 
   private onQuit: (() => void) | null;
+  private onRestart: ((config: GameConfig) => void) | null;
+  private config: GameConfig;
 
-  constructor(root: HTMLElement, config: GameConfig, onQuit?: () => void) {
+  constructor(root: HTMLElement, config: GameConfig, opts: GameUiOptions = {}) {
     this.root = root;
-    this.onQuit = onQuit ?? null;
-    this.game = new Game(config);
+    this.config = config;
+    this.onQuit = opts.onQuit ?? null;
+    this.onRestart = opts.onRestart ?? null;
+    this.game = new Game(config, opts.restore);
     root.innerHTML = TEMPLATE;
     const canvas = root.querySelector<HTMLCanvasElement>(".board")!;
     this.scene = new Scene(canvas);
@@ -64,7 +75,11 @@ export class GameUI {
   private beginTurn(): void {
     this.clearTurnState();
     this.renderHud();
-    if (this.game.gameOver) return this.showEnd();
+    if (this.game.gameOver) {
+      clearActive();
+      return this.showEnd();
+    }
+    saveActive(this.game.toSnapshot()); // auto-save at each turn boundary
     const p = this.game.currentPlayer;
     if (p.isBot) {
       this.setStatus(`${p.name} is planning…`);
@@ -371,6 +386,16 @@ export class GameUI {
     (e.currentTarget as HTMLElement).textContent = on ? "🔊" : "🔇";
   }
 
+  private restart(): void {
+    clearActive();
+    const fresh: GameConfig = {
+      players: this.config.players,
+      seed: (Math.random() * 0xffffffff) >>> 0,
+    };
+    if (this.onRestart) this.onRestart(fresh);
+    else if (this.onQuit) this.onQuit();
+  }
+
   private confirmQuit(): void {
     if (this.game.gameOver) {
       this.onQuit?.();
@@ -380,18 +405,24 @@ export class GameUI {
     back.className = "modal-back";
     back.innerHTML = `
       <div class="modal confirm">
-        <h2>Quit game?</h2>
-        <p>This game will be abandoned and you'll return to the menu.</p>
+        <h2>Game menu</h2>
+        <p>Restart with the same farmers, or quit to the main menu.</p>
         <div class="end-btns">
           <button class="btn" id="q-cancel">Keep playing</button>
+          <button class="btn" id="q-restart">Restart</button>
           <button class="btn primary" id="q-ok">Quit to menu</button>
         </div>
       </div>`;
     this.root.appendChild(back);
     const close = () => back.remove();
     back.querySelector("#q-cancel")!.addEventListener("click", close);
+    back.querySelector("#q-restart")!.addEventListener("click", () => {
+      close();
+      this.restart();
+    });
     back.querySelector("#q-ok")!.addEventListener("click", () => {
       close();
+      clearActive();
       this.onQuit?.();
     });
     back.addEventListener("click", (e) => {
@@ -420,14 +451,16 @@ export class GameUI {
           .join("")}</table>
         <div class="end-btns">
           <button class="btn" id="end-inspect">Inspect board</button>
+          <button class="btn" id="end-menu">Main menu</button>
           <button class="btn primary" id="end-again">Play again</button>
         </div>
       </div>`;
     this.root.appendChild(back);
     back.querySelector("#end-inspect")!.addEventListener("click", () => back.remove());
-    back.querySelector("#end-again")!.addEventListener("click", () =>
+    back.querySelector("#end-menu")!.addEventListener("click", () =>
       this.onQuit ? this.onQuit() : location.reload(),
     );
+    back.querySelector("#end-again")!.addEventListener("click", () => this.restart());
   }
 
   // ---- test hook ----

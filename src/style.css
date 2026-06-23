@@ -109,6 +109,18 @@ body {
   display: flex;
   gap: 10px;
 }
+.btn.resume {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+}
+.btn.resume small {
+  font-weight: 500;
+  font-size: 12px;
+  opacity: 0.85;
+}
 
 /* ---------- buttons ---------- */
 .btn {

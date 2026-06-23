@@ -66,6 +66,35 @@ test.describe("Hedgeways smoke", () => {
     expect(confirm!.y + confirm!.height).toBeLessThanOrEqual(vh + 1);
   });
 
+  test("a game auto-saves and can be resumed after reload", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#play").click();
+    for (let i = 0; i < 4; i++) await page.evaluate(() => (window as any).__hedge.autoPlayTurn());
+    const before = await page.evaluate(() => (window as any).__hedge.ui.game.board.size);
+    expect(before).toBeGreaterThan(0);
+
+    await page.reload();
+    const resume = page.locator("#resume");
+    await expect(resume).toBeVisible();
+    await resume.click();
+    await expect(page.locator("canvas.board")).toBeVisible();
+    const after = await page.evaluate(() => (window as any).__hedge.ui.game.board.size);
+    expect(after).toBe(before); // board restored exactly
+  });
+
+  test("restart from the game menu starts a fresh board", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#play").click();
+    for (let i = 0; i < 4; i++) await page.evaluate(() => (window as any).__hedge.autoPlayTurn());
+    await page.locator("#btn-quit").click();
+    await page.locator("#q-restart").click();
+    await expect(page.locator("canvas.board")).toBeVisible();
+    const size = await page.evaluate(() => (window as any).__hedge.ui.game.board.size);
+    const scores = await page.evaluate(() => (window as any).__hedge.state().scores);
+    expect(size).toBe(0);
+    expect(scores.every((s: number) => s === 0)).toBe(true);
+  });
+
   test("how-to modal opens and closes", async ({ page }) => {
     await page.goto("/");
     await page.locator("#how").click();

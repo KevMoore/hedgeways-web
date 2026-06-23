@@ -2,18 +2,24 @@ import "./style.css";
 import { GameUI } from "./ui/game-ui";
 import { showHowTo } from "./ui/howto";
 import type { Difficulty } from "./game/types";
-import type { GameConfig } from "./game/game";
+import type { GameConfig, GameSnapshot } from "./game/game";
+import { describeSave, loadActive } from "./game/persistence";
 
 const app = document.getElementById("app")!;
 let ui: GameUI | null = null;
 
-function startGame(config: GameConfig): GameUI {
-  ui = new GameUI(app, config, () => renderStart());
+function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
+  const opts = {
+    onQuit: () => renderStart(),
+    onRestart: (c: GameConfig) => startGame(c),
+    restore,
+  };
+  ui = new GameUI(app, config, opts);
   (window as any).__hedge = {
     ui,
     state: () => ui!.state(),
     autoPlayTurn: () => ui!.autoPlayTurn(),
-    newGame: (c: GameConfig) => (ui = new GameUI(app, c, () => renderStart())),
+    newGame: (c: GameConfig) => (ui = new GameUI(app, c, opts)),
   };
   return ui;
 }
@@ -21,10 +27,17 @@ function startGame(config: GameConfig): GameUI {
 const DIFFS: Difficulty[] = ["easy", "medium", "hard", "expert"];
 
 function renderStart(): void {
+  const saved = loadActive();
+  const resumable = saved && !saved.gameOver ? saved : null;
   app.innerHTML = `
     <div class="start">
       <div class="logo">Hedge<span>ways</span></div>
       <p class="tag">Lay hedges, enclose fields, claim the most acres of land.</p>
+      ${
+        resumable
+          ? `<button class="btn primary resume" id="resume">▶ Resume game<small>${describeSave(resumable)}</small></button>`
+          : ""
+      }
       <div class="setup">
         <label class="count-row">Players
           <div class="count" id="count">
@@ -84,6 +97,12 @@ function renderStart(): void {
       drawSlots();
     });
   });
+
+  if (resumable) {
+    app.querySelector("#resume")!.addEventListener("click", () => {
+      startGame(resumable.config, resumable);
+    });
+  }
 
   app.querySelector("#how")!.addEventListener("click", () => showHowTo());
   app.querySelector("#play")!.addEventListener("click", () => {

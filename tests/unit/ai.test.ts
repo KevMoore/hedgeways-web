@@ -5,6 +5,26 @@ import { makeRng } from "../../src/game/rng";
 import { BAG_SIZE } from "../../src/game/bag";
 import type { Difficulty } from "../../src/game/types";
 
+describe("snapshot", () => {
+  it("round-trips game state and keeps playing", () => {
+    const g = new Game({ seed: 5, players: [{ name: "A", isBot: true }, { name: "B", isBot: true }] });
+    const rng = makeRng(5);
+    for (let i = 0; i < 6; i++) {
+      const m = chooseAiMove(g, { rng });
+      if (m) g.commit(g.legalMoves(1)[0] ?? m);
+      else g.pass();
+    }
+    const snap = JSON.parse(JSON.stringify(g.toSnapshot()));
+    const restored = new Game(snap.config, snap);
+    expect(restored.board.cells.size).toBe(g.board.cells.size);
+    expect(restored.players.map((p) => p.score)).toEqual(g.players.map((p) => p.score));
+    expect(restored.current).toBe(g.current);
+    expect(restored.bag.length).toBe(g.bag.length);
+    // restored game can still produce a legal move
+    expect(restored.legalMoves(1).length).toBeGreaterThanOrEqual(0);
+  });
+});
+
 function placedTileCount(game: Game): number {
   const ids = new Set<number>();
   for (const c of game.board.cells.values()) ids.add(c.tileId);

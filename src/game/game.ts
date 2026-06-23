@@ -5,7 +5,20 @@ import { applyMoveToBoard, generateMoves } from "./moves";
 import { validateMove } from "./placement";
 import { findEnclosed } from "./scoring";
 import { makeRng, shuffle } from "./rng";
-import type { Difficulty, Move, Player, Tile } from "./types";
+import type { Cell, Difficulty, Move, Player, Tile } from "./types";
+
+export interface GameSnapshot {
+  config: GameConfig;
+  cells: [string, Cell][];
+  enclosed: string[];
+  bag: Tile[];
+  players: Player[];
+  current: number;
+  turn: number;
+  gameOver: boolean;
+  winnerId: number | null;
+  passes: number;
+}
 
 export interface PlayerConfig {
   name: string;
@@ -38,9 +51,38 @@ export class Game {
   private consecutivePasses = 0;
   private rng: () => number;
 
-  constructor(private config: GameConfig) {
+  constructor(private config: GameConfig, restore?: GameSnapshot) {
     this.rng = makeRng(config.seed ?? 0x1234abcd);
-    this.deal();
+    if (restore) this.load(restore);
+    else this.deal();
+  }
+
+  private load(s: GameSnapshot): void {
+    this.board.cells = new Map(s.cells);
+    this.board.enclosed = new Set(s.enclosed);
+    this.bag = s.bag;
+    this.players = s.players;
+    this.current = s.current;
+    this.turn = s.turn;
+    this.gameOver = s.gameOver;
+    this.winnerId = s.winnerId;
+    this.consecutivePasses = s.passes;
+  }
+
+  /** Serializable snapshot of the whole game (for save/resume). */
+  toSnapshot(): GameSnapshot {
+    return {
+      config: this.config,
+      cells: [...this.board.cells.entries()],
+      enclosed: [...this.board.enclosed],
+      bag: this.bag,
+      players: this.players,
+      current: this.current,
+      turn: this.turn,
+      gameOver: this.gameOver,
+      winnerId: this.winnerId,
+      passes: this.consecutivePasses,
+    };
   }
 
   private deal(): void {
