@@ -33,8 +33,11 @@ export class GameUI {
   /** tappable cell -> the placement that would result (covers any of the hedge's cells) */
   private placementByCell = new Map<string, PlacedTile>();
 
-  constructor(root: HTMLElement, config: GameConfig) {
+  private onQuit: (() => void) | null;
+
+  constructor(root: HTMLElement, config: GameConfig, onQuit?: () => void) {
     this.root = root;
+    this.onQuit = onQuit ?? null;
     this.game = new Game(config);
     root.innerHTML = TEMPLATE;
     const canvas = root.querySelector<HTMLCanvasElement>(".board")!;
@@ -50,6 +53,7 @@ export class GameUI {
     root.querySelector("#btn-help")!.addEventListener("click", () => showHowTo());
     root.querySelector("#btn-fit")!.addEventListener("click", () => this.scene.recenter());
     root.querySelector("#btn-sound")!.addEventListener("click", (e) => this.toggleSound(e));
+    root.querySelector("#btn-quit")!.addEventListener("click", () => this.confirmQuit());
 
     this.syncScene();
     this.renderHud();
@@ -86,7 +90,7 @@ export class GameUI {
     const name = this.game.currentPlayer.name;
     if (!move) {
       this.game.pass();
-      callout(`${name} passes`);
+      callout(`${name} passes`, "pass");
     } else {
       const res = this.game.commit(move);
       this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, name);
@@ -99,7 +103,7 @@ export class GameUI {
     if (scored > 0) {
       this.scene.flashEnclosed(newly);
       sfx.score(scored);
-      callout(`${name} +${scored} acre${scored === 1 ? "" : "s"}`);
+      callout(`${name} encloses ${scored} acre${scored === 1 ? "" : "s"}!`, "score");
     } else {
       sfx.place();
     }
@@ -325,13 +329,17 @@ export class GameUI {
   private renderHud(): void {
     const ps = this.root.querySelector(".players")!;
     ps.innerHTML = "";
+    const lead = Math.max(...this.game.players.map((p) => p.score));
     this.game.players.forEach((p) => {
       const chip = document.createElement("div");
-      chip.className = "pchip" + (p.id === this.game.current && !this.game.gameOver ? " active" : "");
-      chip.innerHTML = `<b>${p.name}</b><span>${p.score}</span>`;
+      const active = p.id === this.game.current && !this.game.gameOver;
+      chip.className = "pchip" + (active ? " active" : "") + (p.score === lead && lead > 0 ? " lead" : "");
+      chip.innerHTML =
+        `<span class="pname">${active ? "▶ " : ""}${p.name}</span>` +
+        `<span class="pscore">${p.score}<small>🌿</small></span>`;
       ps.appendChild(chip);
     });
-    this.root.querySelector(".bag")!.textContent = `Bag ${this.game.bag.length}`;
+    this.root.querySelector(".bag")!.textContent = `🌱 ${this.game.bag.length} in bag`;
   }
 
   private updateButtons(): void {
@@ -363,19 +371,52 @@ export class GameUI {
     (e.currentTarget as HTMLElement).textContent = on ? "🔊" : "🔇";
   }
 
+  private confirmQuit(): void {
+    if (this.game.gameOver) {
+      this.onQuit?.();
+      return;
+    }
+    const back = document.createElement("div");
+    back.className = "modal-back";
+    back.innerHTML = `
+      <div class="modal confirm">
+        <h2>Quit game?</h2>
+        <p>This game will be abandoned and you'll return to the menu.</p>
+        <div class="end-btns">
+          <button class="btn" id="q-cancel">Keep playing</button>
+          <button class="btn primary" id="q-ok">Quit to menu</button>
+        </div>
+      </div>`;
+    this.root.appendChild(back);
+    const close = () => back.remove();
+    back.querySelector("#q-cancel")!.addEventListener("click", close);
+    back.querySelector("#q-ok")!.addEventListener("click", () => {
+      close();
+      this.onQuit?.();
+    });
+    back.addEventListener("click", (e) => {
+      if (e.target === back) close();
+    });
+  }
+
   private showEnd(): void {
     const standings = this.game.standings();
     const winner = standings[0];
     const tie = standings.filter((p) => p.score === winner.score).length > 1;
+    const winLine = tie ? "It's a tie!" : winner.name === "You" ? "You win!" : `${winner.name} wins!`;
     confetti();
     sfx.win();
     const back = document.createElement("div");
     back.className = "modal-back";
     back.innerHTML = `
       <div class="modal end">
-        <h2>${tie ? "It's a tie!" : `${winner.name} wins!`}</h2>
+        <div class="trophy">${tie ? "🤝" : "🏆"}</div>
+        <h2>${winLine}</h2>
         <table>${standings
-          .map((p) => `<tr><td>${p.name}</td><td>${p.score} acres</td></tr>`)
+          .map(
+            (p, i) =>
+              `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${p.name}</td><td>${p.score} acre${p.score === 1 ? "" : "s"}</td></tr>`,
+          )
           .join("")}</table>
         <div class="end-btns">
           <button class="btn" id="end-inspect">Inspect board</button>
@@ -384,7 +425,9 @@ export class GameUI {
       </div>`;
     this.root.appendChild(back);
     back.querySelector("#end-inspect")!.addEventListener("click", () => back.remove());
-    back.querySelector("#end-again")!.addEventListener("click", () => location.reload());
+    back.querySelector("#end-again")!.addEventListener("click", () =>
+      this.onQuit ? this.onQuit() : location.reload(),
+    );
   }
 
   // ---- test hook ----
@@ -422,6 +465,10 @@ function btn(root: HTMLElement, sel: string, enabled: boolean): void {
   (root.querySelector(sel) as HTMLButtonElement).disabled = !enabled;
 }
 
+function medal(i: number): string {
+  return ["🥇", "🥈", "🥉"][i] ?? "•";
+}
+
 const TEMPLATE = `
   <div class="game">
     <header class="hud">
@@ -431,6 +478,7 @@ const TEMPLATE = `
       <button id="btn-fit" class="icon" title="Recenter board">⤢</button>
       <button id="btn-sound" class="icon" title="Sound">🔊</button>
       <button id="btn-help" class="icon" title="How to play">?</button>
+      <button id="btn-quit" class="icon" title="Quit to menu">✕</button>
     </header>
     <canvas class="board"></canvas>
     <footer class="controls">

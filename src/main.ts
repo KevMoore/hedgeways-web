@@ -8,12 +8,12 @@ const app = document.getElementById("app")!;
 let ui: GameUI | null = null;
 
 function startGame(config: GameConfig): GameUI {
-  ui = new GameUI(app, config);
+  ui = new GameUI(app, config, () => renderStart());
   (window as any).__hedge = {
     ui,
     state: () => ui!.state(),
     autoPlayTurn: () => ui!.autoPlayTurn(),
-    newGame: (c: GameConfig) => (ui = new GameUI(app, c)),
+    newGame: (c: GameConfig) => (ui = new GameUI(app, c, () => renderStart())),
   };
   return ui;
 }

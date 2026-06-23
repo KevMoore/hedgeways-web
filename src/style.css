@@ -177,18 +177,31 @@ body {
   gap: 8px;
   align-items: center;
   font-size: 14px;
+  transition: background 0.2s, transform 0.2s;
 }
 .pchip.active {
   background: var(--green);
   color: #fff;
   box-shadow: 0 0 0 2px #fff inset;
+  transform: translateY(-1px);
 }
-.pchip span {
+.pchip.lead .pscore {
+  color: #ffd34d;
+}
+.pchip .pname {
+  font-weight: 600;
+}
+.pchip .pscore {
   font-weight: 800;
+  font-size: 16px;
+}
+.pchip .pscore small {
+  font-size: 11px;
 }
 .bag {
   font-size: 13px;
-  opacity: 0.85;
+  opacity: 0.9;
+  white-space: nowrap;
 }
 .board {
   flex: 1 1 0;
@@ -284,18 +297,41 @@ body {
 .modal.howto li {
   margin: 6px 0;
 }
+.modal.end {
+  text-align: center;
+}
+.modal.end .trophy {
+  font-size: 54px;
+  line-height: 1;
+  margin-bottom: 4px;
+  animation: trophy-pop 0.5s ease;
+}
+@keyframes trophy-pop {
+  from {
+    transform: scale(0.3) rotate(-15deg);
+    opacity: 0;
+  }
+}
 .modal.end table {
   width: 100%;
   border-collapse: collapse;
   margin: 12px 0;
+  text-align: left;
 }
 .modal.end td {
-  padding: 6px 4px;
+  padding: 8px 6px;
   border-bottom: 1px solid #e0e6da;
 }
 .modal.end td:last-child {
   text-align: right;
   font-weight: 800;
+}
+.modal.end tr.win td {
+  background: #f3fbe9;
+  font-weight: 800;
+}
+.modal.confirm p {
+  color: #4a5a4a;
 }
 .end-btns {
   display: flex;
@@ -306,35 +342,40 @@ body {
 /* ---------- fx ---------- */
 .callout {
   position: fixed;
-  top: 18%;
+  top: 16%;
   left: 50%;
-  transform: translateX(-50%);
-  background: var(--frame);
+  margin-left: -50vw;
+  width: 100vw;
+  text-align: center;
   color: #fff;
-  padding: 10px 18px;
-  border-radius: 999px;
   font-weight: 800;
-  font-size: 18px;
+  font-size: clamp(18px, 5vw, 26px);
   z-index: 60;
-  animation: pop 1.4s ease forwards;
   pointer-events: none;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
 }
-@keyframes pop {
-  0% {
-    opacity: 0;
-    transform: translateX(-50%) scale(0.7);
-  }
-  15% {
-    opacity: 1;
-    transform: translateX(-50%) scale(1.05);
-  }
-  80% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateX(-50%) translateY(-20px);
-  }
+.callout::before {
+  content: "";
+}
+.callout.info,
+.callout.pass,
+.callout.score {
+  display: block;
+}
+.callout span,
+.callout {
+  /* inline content styled via wrapper below */
+}
+.callout.info {
+  color: #fff;
+}
+.callout.pass {
+  color: #cdd8c8;
+  font-size: clamp(15px, 4vw, 20px);
+}
+.callout.score {
+  color: #ffd34d;
+  font-size: clamp(22px, 6vw, 34px);
 }
 .confetti {
   position: fixed;

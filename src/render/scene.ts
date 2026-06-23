@@ -15,6 +15,8 @@ interface Ghost {
 
 const MIN_SCALE = 18;
 const MAX_SCALE = 110;
+const POP_MS = 320; // tile placement pop-in
+const ACRE_POP_MS = 1300; // floating "+N acres" lifetime
 
 export class Scene {
   private ctx: CanvasRenderingContext2D;
@@ -24,6 +26,8 @@ export class Scene {
   private ghost: Ghost | null = null;
   private highlights = new Set<string>();
   private flash = new Map<string, number>(); // cell -> start time
+  private placedAt = new Map<string, number>(); // cell -> placement time (pop-in anim)
+  private acrePops: { x: number; y: number; n: number; t0: number }[] = [];
 
   private scale = 56;
   private camX = 0; // world coords at canvas centre
@@ -42,10 +46,17 @@ export class Scene {
     this.resize();
     window.addEventListener("resize", () => this.resize());
     const loop = () => {
-      if (this.needsDraw || this.flash.size) this.draw();
+      if (this.needsDraw || this.flash.size || this.acrePops.length || this.animating()) this.draw();
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  private animating(): boolean {
+    if (this.placedAt.size === 0) return false;
+    const now = performance.now();
+    for (const t of this.placedAt.values()) if (now - t < POP_MS) return true;
+    return false;
   }
 
   reset(): void {
@@ -54,12 +65,19 @@ export class Scene {
     this.ghost = null;
     this.highlights.clear();
     this.flash.clear();
+    this.placedAt.clear();
+    this.acrePops = [];
     this.userMoved = false;
     this.scale = 56;
     this.needsDraw = true;
   }
 
   syncBoard(cells: Map<string, Cell>, enclosed: Set<string>): void {
+    // stamp cells that are newly on the board so they pop in
+    const now = performance.now();
+    for (const k of cells.keys()) if (!this.cells.has(k) && !this.placedAt.has(k)) this.placedAt.set(k, now);
+    // forget pop timers for cells no longer present (undo)
+    for (const k of [...this.placedAt.keys()]) if (!cells.has(k)) this.placedAt.delete(k);
     this.cells = new Map(cells);
     this.enclosed = new Set(enclosed);
     if (!this.userMoved) this.fitBoard();
@@ -116,7 +134,17 @@ export class Scene {
 
   flashEnclosed(cells: Iterable<string>): void {
     const now = performance.now();
-    for (const k of cells) this.flash.set(k, now);
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (const k of cells) {
+      this.flash.set(k, now);
+      const [x, y] = k.split(",").map(Number);
+      sx += x;
+      sy += y;
+      n++;
+    }
+    if (n > 0) this.acrePops.push({ x: sx / n + 0.5, y: sy / n + 0.5, n, t0: now });
     this.needsDraw = true;
   }
 
@@ -289,10 +317,16 @@ export class Scene {
       this.drawAcreFlash(x, y, a);
     }
 
-    // tiles
+    // tiles (with placement pop-in)
     for (const [k, cell] of this.cells) {
       const [x, y] = k.split(",").map(Number);
-      this.drawHedge(x, y, cell.colour, 1);
+      const t0 = this.placedAt.get(k);
+      let pop = 1;
+      if (t0 !== undefined) {
+        const p = (now - t0) / POP_MS;
+        pop = p >= 1 ? 1 : easeOutBack(p);
+      }
+      this.drawHedge(x, y, cell.colour, 1, false, pop);
     }
 
     // highlights — cells where the selected hedge could legally sit
@@ -311,6 +345,30 @@ export class Scene {
     // ghost
     if (this.ghost) {
       for (const c of this.ghost.cells) this.drawHedge(c.x, c.y, c.colour, this.ghost.valid ? 0.55 : 0.4, !this.ghost.valid);
+    }
+
+    // floating "+N acres" pops
+    this.acrePops = this.acrePops.filter((p) => now - p.t0 < ACRE_POP_MS);
+    for (const p of this.acrePops) {
+      const age = (now - p.t0) / ACRE_POP_MS;
+      const [px, py] = this.worldToScreen(p.x, p.y);
+      const rise = 26 * age;
+      const alpha = age < 0.15 ? age / 0.15 : 1 - (age - 0.15) / 0.85;
+      const scale = age < 0.2 ? 0.6 + (age / 0.2) * 0.5 : 1.1;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.translate(px, py - rise);
+      ctx.scale(scale, scale);
+      ctx.font = `800 ${Math.max(16, this.scale * 0.42)}px "Trebuchet MS", sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const label = `+${p.n} acre${p.n === 1 ? "" : "s"}`;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(20,40,24,0.9)";
+      ctx.strokeText(label, 0, 0);
+      ctx.fillStyle = "#ffd34d";
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
     }
 
     ctx.restore();
@@ -339,46 +397,73 @@ export class Scene {
   private drawAcre(x: number, y: number): void {
     const ctx = this.ctx;
     const [px, py] = this.worldToScreen(x, y);
+    const s = this.scale;
     ctx.fillStyle = ACRE_HEX;
-    ctx.fillRect(px, py, this.scale, this.scale);
+    ctx.fillRect(px, py, s, s);
+    // faint furrows so enclosed land reads as a tended field
+    ctx.strokeStyle = "rgba(120,160,80,0.25)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 1; i < 4; i++) {
+      ctx.moveTo(px + 2, py + (s * i) / 4);
+      ctx.lineTo(px + s - 2, py + (s * i) / 4);
+    }
+    ctx.stroke();
   }
   private drawAcreFlash(x: number, y: number, alpha: number): void {
     const ctx = this.ctx;
     const [px, py] = this.worldToScreen(x, y);
-    ctx.fillStyle = `rgba(245,166,35,${0.7 * alpha})`;
+    ctx.fillStyle = `rgba(245,200,60,${0.55 * alpha})`;
     ctx.fillRect(px, py, this.scale, this.scale);
   }
 
-  /** Procedural wooden hedge cell with a jagged leaf blob. */
-  private drawHedge(x: number, y: number, colour: Colour, alpha: number, danger = false): void {
+  /** Procedural hedge cell: dark wooden frame + a bushy foliage cluster. */
+  private drawHedge(x: number, y: number, colour: Colour, alpha: number, danger = false, pop = 1): void {
     const ctx = this.ctx;
     const [px, py] = this.worldToScreen(x, y);
     const s = this.scale;
-    const gap = Math.max(1, s * 0.04);
-    ctx.save();
-    ctx.globalAlpha = alpha;
-
-    // wooden frame
-    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, s * 0.12);
-    ctx.fillStyle = danger ? "#7a2230" : FRAME_HEX;
-    ctx.fill();
-    // crack
-    ctx.strokeStyle = FRAME_CRACK_HEX;
-    ctx.lineWidth = Math.max(1, s * 0.03);
-    ctx.stroke();
-
-    // leaf blob
     const cx = px + s / 2;
     const cy = py + s / 2;
-    const base = s * 0.32;
+    const gap = Math.max(1, s * 0.045);
     const seed = hash(x, y);
-    leafBlob(ctx, cx, cy, base, seed);
-    ctx.fillStyle = danger ? "#ffffff" : COLOUR_HEX[colour];
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (pop !== 1) {
+      ctx.translate(cx, cy);
+      ctx.scale(pop, pop);
+      ctx.translate(-cx, -cy);
+    }
+
+    // wooden frame
+    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, s * 0.14);
+    ctx.fillStyle = danger ? "#7a2230" : FRAME_HEX;
     ctx.fill();
-    leafBlob(ctx, cx, cy, base * 0.6, seed ^ 0x55);
-    ctx.fillStyle = danger ? "#e0e0e0" : COLOUR_HEX_DARK[colour];
-    ctx.globalAlpha = alpha * 0.5;
-    ctx.fill();
+    // wood grain
+    ctx.save();
+    ctx.clip();
+    ctx.strokeStyle = "rgba(0,0,0,0.18)";
+    ctx.lineWidth = Math.max(1, s * 0.02);
+    let g = seed >>> 0;
+    for (let i = 0; i < 3; i++) {
+      g = (g * 1664525 + 1013904223) >>> 0;
+      const gy = py + gap + ((g / 4294967296) * (s - gap * 2));
+      ctx.beginPath();
+      ctx.moveTo(px + gap, gy);
+      ctx.bezierCurveTo(px + s * 0.35, gy - s * 0.03, px + s * 0.65, gy + s * 0.03, px + s - gap, gy);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // crack outline
+    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, s * 0.14);
+    ctx.strokeStyle = FRAME_CRACK_HEX;
+    ctx.lineWidth = Math.max(1, s * 0.035);
+    ctx.stroke();
+
+    // foliage
+    const fill = danger ? "#ffffff" : COLOUR_HEX[colour];
+    const dark = danger ? "#cfcfcf" : COLOUR_HEX_DARK[colour];
+    foliage(ctx, cx, cy, s * 0.42, seed, fill, dark, alpha);
 
     ctx.restore();
   }
@@ -400,23 +485,54 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
-function leafBlob(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number, seed: number) {
-  const spikes = 11;
+function easeOutBack(p: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  const x = p - 1;
+  return 1 + c3 * x * x * x + c1 * x * x;
+}
+
+/** A bushy cluster of small pointed leaves — reads as clipped hedge foliage. */
+function foliage(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  seed: number,
+  fill: string,
+  dark: string,
+  alpha: number,
+) {
   let s = seed >>> 0;
   const rand = () => {
     s = (s * 1664525 + 1013904223) >>> 0;
     return s / 4294967296;
   };
-  ctx.beginPath();
-  for (let i = 0; i < spikes; i++) {
-    const ang = (i / spikes) * Math.PI * 2;
-    const rr = radius * (0.7 + rand() * 0.55);
-    const x = cx + Math.cos(ang) * rr;
-    const y = cy + Math.sin(ang) * rr;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+  const leaf = (lx: number, ly: number, len: number, ang: number, colour: string, a: number) => {
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(lx, ly);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(0, -len);
+    ctx.quadraticCurveTo(len * 0.6, 0, 0, len);
+    ctx.quadraticCurveTo(-len * 0.6, 0, 0, -len);
+    ctx.fillStyle = colour;
+    ctx.fill();
+    ctx.restore();
+  };
+  // dark base layer (depth)
+  for (let i = 0; i < 9; i++) {
+    const ang = rand() * Math.PI * 2;
+    const dist = rand() * radius * 0.7;
+    leaf(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, radius * (0.5 + rand() * 0.3), rand() * Math.PI, dark, alpha * 0.9);
   }
-  ctx.closePath();
+  // bright top layer
+  for (let i = 0; i < 11; i++) {
+    const ang = rand() * Math.PI * 2;
+    const dist = rand() * radius * 0.6;
+    leaf(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, radius * (0.45 + rand() * 0.3), rand() * Math.PI, fill, alpha);
+  }
 }
 
 function hash(x: number, y: number): number {
