@@ -1,4 +1,5 @@
 import { Board, DIRS } from "./board";
+import { MAX_LAY } from "./constants";
 import type { PlacedCell, PlacedTile } from "./types";
 import { key } from "./types";
 
@@ -18,6 +19,7 @@ export interface ValidationResult {
  */
 export function validateMove(board: Board, tiles: PlacedTile[]): ValidationResult {
   if (tiles.length === 0) return { ok: false, reason: "empty move" };
+  if (tiles.length > MAX_LAY) return { ok: false, reason: `lay at most ${MAX_LAY} hedges per turn` };
 
   // map cell -> tileId for this move, and detect overlaps / occupied / enclosed
   const moveCells = new Map<string, { colour: PlacedCell["colour"]; tileId: number }>();

@@ -1,6 +1,6 @@
 import { chooseAiMove } from "../game/ai";
 import { isPalindrome, orient } from "../game/board";
-import { COLOUR_HEX, COLOUR_HEX_DARK } from "../game/constants";
+import { COLOUR_HEX, COLOUR_HEX_DARK, MAX_LAY } from "../game/constants";
 import { Game, type GameConfig } from "../game/game";
 import { generateMoves } from "../game/moves";
 import { validateMove } from "../game/placement";
@@ -30,6 +30,8 @@ export class GameUI {
   private oriIndex = 0;
   private busy = false;
   private invalidTimer: number | null = null;
+  /** tappable cell -> the placement that would result (covers any of the hedge's cells) */
+  private placementByCell = new Map<string, PlacedTile>();
 
   constructor(root: HTMLElement, config: GameConfig) {
     this.root = root;
@@ -38,12 +40,15 @@ export class GameUI {
     const canvas = root.querySelector<HTMLCanvasElement>(".board")!;
     this.scene = new Scene(canvas);
     this.scene.tapHandler = (x, y) => this.onTapCell(x, y);
+    this.scene.hoverHandler = (x, y) => this.onHover(x, y);
+    this.scene.leaveHandler = () => this.scene.setGhost(null, false);
 
     root.querySelector("#btn-rotate")!.addEventListener("click", () => this.rotate());
     root.querySelector("#btn-undo")!.addEventListener("click", () => this.undo());
     root.querySelector("#btn-confirm")!.addEventListener("click", () => this.confirm());
     root.querySelector("#btn-pass")!.addEventListener("click", () => this.passTurn());
     root.querySelector("#btn-help")!.addEventListener("click", () => showHowTo());
+    root.querySelector("#btn-fit")!.addEventListener("click", () => this.scene.recenter());
     root.querySelector("#btn-sound")!.addEventListener("click", (e) => this.toggleSound(e));
 
     this.syncScene();
@@ -67,7 +72,11 @@ export class GameUI {
     // human
     const hasMove = this.game.hasLegalMove();
     this.renderHand(false);
-    this.setStatus(hasMove ? `Your turn — lay 1 to 3 hedges` : `No legal move — you must pass`);
+    this.setStatus(
+      hasMove
+        ? `Your turn — pick a hedge, then choose a highlighted square`
+        : `No legal move — you must pass`,
+    );
     this.updateButtons();
   }
 
@@ -100,23 +109,44 @@ export class GameUI {
   private onTapCell(x: number, y: number): void {
     if (this.busy || this.game.currentPlayer.isBot) return;
     if (this.selectedId == null) return;
-    const tile = this.handTile(this.selectedId);
-    if (!tile) return;
-    const [dir, flip] = ALL_ORI[this.oriIndex];
-    const cells = orient(tile, x, y, dir, flip);
-    const candidate: PlacedTile = { tileId: tile.id, cells };
-    if (validateMove(this.game.board, [...this.pending, candidate]).ok) {
+    // tap ANY cell a legal placement would cover
+    const candidate = this.placementByCell.get(key(x, y));
+    if (candidate) {
       this.pending.push(candidate);
-      this.usedIds.add(tile.id);
+      this.usedIds.add(candidate.tileId);
       this.selectedId = null;
       sfx.place();
-      this.scene.setHighlights([]);
+      this.scene.setGhost(null, false);
+      this.refreshHighlights();
       this.syncScene();
       this.renderHand(false);
       this.updateButtons();
-    } else {
-      this.flashInvalid(cells);
+      const left = 3 - this.pending.length;
+      this.setStatus(
+        left > 0
+          ? `${this.pending.length} laid — tap Confirm, or add up to ${left} more`
+          : `3 hedges laid — tap Confirm turn`,
+      );
+      return;
     }
+    // invalid spot: brief red feedback in the current orientation
+    const tile = this.handTile(this.selectedId);
+    if (!tile) return;
+    const [dir, flip] = ALL_ORI[this.oriIndex];
+    this.flashInvalid(orient(tile, x, y, dir, flip));
+  }
+
+  private onHover(x: number, y: number): void {
+    if (this.busy || this.game.currentPlayer.isBot || this.selectedId == null) return;
+    const candidate = this.placementByCell.get(key(x, y));
+    if (candidate) {
+      this.scene.setGhost(candidate.cells, true);
+      return;
+    }
+    const tile = this.handTile(this.selectedId);
+    if (!tile) return;
+    const [dir, flip] = ALL_ORI[this.oriIndex];
+    this.scene.setGhost(orient(tile, x, y, dir, flip), false);
   }
 
   private flashInvalid(cells: PlacedTile["cells"]): void {
@@ -128,6 +158,7 @@ export class GameUI {
 
   private selectTile(id: number): void {
     if (this.usedIds.has(id)) return;
+    if (this.pending.length >= MAX_LAY) return; // at most 3 hedges per turn
     this.selectedId = this.selectedId === id ? null : id;
     this.oriIndex = this.firstUsableOri(id);
     sfx.pickup();
@@ -186,12 +217,27 @@ export class GameUI {
 
   // ---- highlights ----
   private refreshHighlights(): void {
+    this.placementByCell.clear();
     if (this.selectedId == null) {
       this.scene.setHighlights([]);
       return;
     }
     const tile = this.handTile(this.selectedId)!;
-    this.scene.setHighlights(this.anchorsFor(tile, ALL_ORI[this.oriIndex]).keys());
+    const cands = this.anchorsFor(tile, ALL_ORI[this.oriIndex]);
+    const cover = new Set<string>();
+    // map every covered cell -> a placement, so tapping anywhere on the hedge works.
+    // prefer the placement whose anchor is the tapped cell for predictable behaviour.
+    for (const [anchorKey, cand] of cands) {
+      this.placementByCell.set(anchorKey, cand);
+      for (const c of cand.cells) cover.add(key(c.x, c.y));
+    }
+    for (const cand of cands.values()) {
+      for (const c of cand.cells) {
+        const ck = key(c.x, c.y);
+        if (!this.placementByCell.has(ck)) this.placementByCell.set(ck, cand);
+      }
+    }
+    this.scene.setHighlights(cover);
   }
 
   /** Legal anchor cells (segment-0 position) for placing `tile` in this orientation now. */
@@ -306,6 +352,7 @@ export class GameUI {
     this.usedIds.clear();
     this.selectedId = null;
     this.oriIndex = 0;
+    this.placementByCell.clear();
     this.scene.setHighlights([]);
     this.scene.setGhost(null, false);
   }
@@ -381,6 +428,7 @@ const TEMPLATE = `
       <div class="brand">Hedge<span>ways</span></div>
       <div class="players"></div>
       <div class="bag"></div>
+      <button id="btn-fit" class="icon" title="Recenter board">⤢</button>
       <button id="btn-sound" class="icon" title="Sound">🔊</button>
       <button id="btn-help" class="icon" title="How to play">?</button>
     </header>

@@ -32,6 +32,9 @@ export class Scene {
   private needsDraw = true;
 
   tapHandler: ((x: number, y: number) => void) | null = null;
+  hoverHandler: ((x: number, y: number) => void) | null = null;
+  leaveHandler: (() => void) | null = null;
+  private hoverCell = "";
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
@@ -60,7 +63,45 @@ export class Scene {
     this.cells = new Map(cells);
     this.enclosed = new Set(enclosed);
     if (!this.userMoved) this.fitBoard();
+    else this.ensureVisible();
     this.needsDraw = true;
+  }
+
+  /** Re-fit only if part of the board has drifted outside the viewport. */
+  ensureVisible(): void {
+    if (this.cells.size === 0) return;
+    const { minX, minY, maxX, maxY } = this.boundsWithGhost();
+    const vw = this.canvas.width / this.dpr;
+    const vh = this.canvas.height / this.dpr;
+    const [x0, y0] = this.worldToScreen(minX, minY);
+    const [x1, y1] = this.worldToScreen(maxX + 1, maxY + 1);
+    const pad = 8;
+    if (x0 < pad || y0 < pad || x1 > vw - pad || y1 > vh - pad) this.fitBoard();
+  }
+
+  /** Manual recenter (e.g. a Fit button). */
+  recenter(): void {
+    this.userMoved = false;
+    this.fitBoard();
+  }
+
+  private boundsWithGhost(): { minX: number; minY: number; maxX: number; maxY: number } {
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    const consider = (x: number, y: number) => {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    };
+    for (const k of this.cells.keys()) {
+      const [x, y] = k.split(",").map(Number);
+      consider(x, y);
+    }
+    if (this.ghost) for (const c of this.ghost.cells) consider(c.x, c.y);
+    return { minX, minY, maxX, maxY };
   }
 
   setGhost(cells: PlacedCell[] | null, valid: boolean): void {
@@ -94,21 +135,7 @@ export class Scene {
       this.needsDraw = true;
       return;
     }
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-    const consider = (x: number, y: number) => {
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-    };
-    for (const k of this.cells.keys()) {
-      const [x, y] = k.split(",").map(Number);
-      consider(x, y);
-    }
-    if (this.ghost) for (const c of this.ghost.cells) consider(c.x, c.y);
+    const { minX, minY, maxX, maxY } = this.boundsWithGhost();
     const wCells = maxX - minX + 1;
     const hCells = maxY - minY + 1;
     const pad = 1.5;
@@ -163,7 +190,19 @@ export class Scene {
       }
     });
     c.addEventListener("pointermove", (e) => {
-      if (!down) return;
+      if (!down) {
+        // hover preview (desktop / pen — touch never fires move without a button)
+        if (this.hoverHandler && e.pointerType !== "touch") {
+          const rect = c.getBoundingClientRect();
+          const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
+          const k = `${cx},${cy}`;
+          if (k !== this.hoverCell) {
+            this.hoverCell = k;
+            this.hoverHandler(cx, cy);
+          }
+        }
+        return;
+      }
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
@@ -176,12 +215,16 @@ export class Scene {
       }
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
-      if (Math.abs(e.clientX - startX) > 5 || Math.abs(e.clientY - startY) > 5) moved = true;
+      // only treat as an intentional pan (and pin the camera) past a small threshold,
+      // so click jitter doesn't permanently disable auto-fit.
+      if (Math.abs(e.clientX - startX) > 5 || Math.abs(e.clientY - startY) > 5) {
+        moved = true;
+        this.userMoved = true;
+      }
       this.camX -= dx / this.scale;
       this.camY -= dy / this.scale;
       lastX = e.clientX;
       lastY = e.clientY;
-      this.userMoved = true;
       this.needsDraw = true;
     });
     const up = (e: PointerEvent) => {
@@ -196,6 +239,10 @@ export class Scene {
     };
     c.addEventListener("pointerup", up);
     c.addEventListener("pointercancel", (e) => pointers.delete(e.pointerId));
+    c.addEventListener("pointerleave", () => {
+      this.hoverCell = "";
+      if (this.leaveHandler) this.leaveHandler();
+    });
     c.addEventListener(
       "wheel",
       (e) => {
@@ -248,17 +295,17 @@ export class Scene {
       this.drawHedge(x, y, cell.colour, 1);
     }
 
-    // highlights
+    // highlights — cells where the selected hedge could legally sit
     if (this.highlights.size) {
-      ctx.strokeStyle = "rgba(40,120,40,0.55)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 4]);
       for (const k of this.highlights) {
         const [x, y] = k.split(",").map(Number);
         const [px, py] = this.worldToScreen(x, y);
+        ctx.fillStyle = "rgba(108,194,74,0.32)";
+        ctx.fillRect(px + 1, py + 1, this.scale - 2, this.scale - 2);
+        ctx.strokeStyle = "rgba(40,110,40,0.7)";
+        ctx.lineWidth = 2;
         ctx.strokeRect(px + 2, py + 2, this.scale - 4, this.scale - 4);
       }
-      ctx.setLineDash([]);
     }
 
     // ghost

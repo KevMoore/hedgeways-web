@@ -75,6 +75,19 @@ describe("placement (Qwirkle-strict)", () => {
     expect(validateMove(b, badMove).ok).toBe(false);
   });
 
+  it("rejects laying more than 3 hedges in a turn", () => {
+    const b = new Board();
+    // four colour-linked all-green tiles in a connected row of rows
+    const tiles: PlacedTile[] = [
+      { tileId: 1, cells: orient(tile(1, "GGG"), 0, 0, "H", false) },
+      { tileId: 2, cells: orient(tile(2, "GGG"), 0, 1, "H", false) },
+      { tileId: 3, cells: orient(tile(3, "GGG"), 0, 2, "H", false) },
+      { tileId: 4, cells: orient(tile(4, "GGG"), 0, 3, "H", false) },
+    ];
+    expect(validateMove(b, tiles).ok).toBe(false);
+    expect(validateMove(b, tiles.slice(0, 3)).ok).toBe(true);
+  });
+
   it("rejects a tile not linked to anything", () => {
     const b = new Board();
     const t1 = tile(1, "GYB");
