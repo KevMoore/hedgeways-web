@@ -65,7 +65,14 @@ export class Game {
     this.board.enclosed = new Set(s.enclosed);
     this.board.acreOwner = new Map(s.acreOwner ?? []);
     this.bag = s.bag.map((t) => ({ id: t.id, segments: [...t.segments] }));
-    this.players = s.players.map((p) => ({ ...p, hand: p.hand.map((t) => ({ id: t.id, segments: [...t.segments] })) }));
+    // backfill colour/animal for saves written before livestock kits existed
+    // (the save key is unchanged, so old in-progress games still rehydrate here)
+    this.players = s.players.map((p, i) => ({
+      ...p,
+      hand: p.hand.map((t) => ({ id: t.id, segments: [...t.segments] })),
+      colour: p.colour ?? PLAYER_KITS[i % PLAYER_KITS.length].colour,
+      animal: p.animal ?? PLAYER_KITS[i % PLAYER_KITS.length].animal,
+    }));
     this.current = s.current;
     this.turn = s.turn;
     this.gameOver = s.gameOver;
@@ -76,6 +83,11 @@ export class Game {
     this.board.enclosed = findEnclosed(this.board);
     for (const k of [...this.board.acreOwner.keys()])
       if (!this.board.enclosed.has(k)) this.board.acreOwner.delete(k);
+    // reconcile scores with surviving ownership: a rules change (e.g. 4->8 conn)
+    // can un-seal a field, so derive each score from the acres still owned
+    const owned = new Map<number, number>();
+    for (const id of this.board.acreOwner.values()) owned.set(id, (owned.get(id) ?? 0) + 1);
+    for (const p of this.players) p.score = owned.get(p.id) ?? 0;
   }
 
   /** Deep, serializable snapshot of the whole game (for save/resume) — never aliases live state. */

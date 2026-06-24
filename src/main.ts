@@ -20,6 +20,7 @@ function teardown(): void {
   stopHome?.();
   stopHome = null;
   sfx.setAnimals([]); // no critter ambience on the menu
+  sfx.stopMusic(); // music + ambience only play during a game
 }
 
 function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
@@ -30,6 +31,7 @@ function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
     restore,
   };
   ui = new GameUI(app, config, opts);
+  sfx.startMusic();
   (window as any).__hedge = {
     ui,
     state: () => ui!.state(),

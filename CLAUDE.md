@@ -55,7 +55,7 @@ The **engine (`src/game/`) is the source of truth and is UI-agnostic** — `scen
 - A **hedge tile** is a 1×3 strip with three coloured segments drawn from {G, Y, B, P}. There are 52 tiles in the bag.
 - A player has a hand of 4 hedges and on each turn lays **1, 2, or 3** hedges then replenishes back to 4 (until the bag is empty).
 - **Placement (Qwirkle-strict):** every orthogonally abutting segment-pair — between laid tiles and existing tiles, and between laid tiles within the same turn — must be the **same colour**. After turn 1, the laid group must also touch ≥1 existing hedge.
-- **Diagonal touches do not enclose** a field (4-connectivity flood-fill).
+- **Diagonal touches do not enclose** a field — hedges that meet only at a corner leave a gap the outside slips through, so the exterior is flooded with **8-connectivity** (the diagonal gap leaks).
 - **No hedges may be laid inside a previously-enclosed field.**
 - **Closer-takes-all scoring:** whoever's move seals a field scores every acre in it, regardless of who placed the surrounding hedges. One move may seal several fields (all count).
 - **Stuck** = the current player has no legal placement → **pass**.
@@ -65,7 +65,7 @@ The **engine (`src/game/`) is the source of truth and is UI-agnostic** — `scen
 
 - **Canvas2D, not three.js** — the game is flat 1×3 tiles on a grid; 2D is sharper, ~10× lighter, easier to animate, and mobile-safe. (SproutWord removed three.js for the same reason; we follow that precedent.)
 - **No player-coloured tiles.** Tile colours (G/Y/B/P) are intrinsic to the hedges and used for linking. Players are anonymous on the board — they differ only by hand + score totals. This matches the physical game (the bag is shared, hedges look the same once placed).
-- **Sparse unbounded grid** (`Map<"x,y",Cell>`). The board grows in any direction. `findEnclosed()` floods the exterior from a 1-cell margin so every empty cell unreached by the flood is enclosed (correct 4-connectivity).
+- **Sparse unbounded grid** (`Map<"x,y",Cell>`). The board grows in any direction. `findEnclosed()` floods the exterior from a 1-cell margin so every empty cell unreached by the flood is enclosed (8-connectivity exterior flood, so a diagonal-corner gap leaks and does **not** seal a field).
 - **Tiered AI:**
   - `easy` greedy on immediate gain + 50% noise.
   - `medium` greedy minus a cheap near-closed-cell threat proxy (3-wall empties) — avoids gifting steals to the next mover.

@@ -1,7 +1,7 @@
 /**
  * Animated livestock sprite-sheet support.
  *
- * Sheet: public/sprites/livestock.png — 1024x1024, transparent, an 8x8 grid of
+ * Sheet: public/sprites/livestock.webp — 1024x1024, transparent, an 8x8 grid of
  * 128px cells. Frame index = row*8 + col (0-based), left->right, top->bottom.
  * Each animal spans two rows: Idle1-2, Walk1-4, Action1-4 (peck/eat/graze),
  * Happy1-4. Until the PNG loads the renderer falls back to the animated emoji.
@@ -23,7 +23,7 @@ const ANIMALS: Record<string, AnimalFrames> = {
   "🐮": { idle: [48, 49], walk: [50, 51, 52, 53], action: [54, 55, 56, 57], happy: [58, 59, 60, 61] },
 };
 
-const SRC = "/sprites/livestock.png";
+const SRC = "/sprites/livestock.webp";
 
 export class Sprites {
   private img = new Image();
@@ -122,14 +122,6 @@ export class Sprites {
     return seq[((i % seq.length) + seq.length) % seq.length];
   }
 
-  /** A celebratory "happy" frame (for freshly-claimed bursts). */
-  happyFrame(animal: string, timeMs: number): number {
-    const a = ANIMALS[animal];
-    if (!a) return 0;
-    const i = Math.floor((timeMs / 1000) * 8) % a.happy.length;
-    return a.happy[i];
-  }
-
   /** Draw a frame (by absolute index) centred in a size x size box at (cx,cy). */
   drawFrame(ctx: CanvasRenderingContext2D, frame: number, cx: number, cy: number, size: number): void {
     const src = this.sheet;
@@ -138,4 +130,16 @@ export class Sprites {
     const sy = Math.floor(frame / COLS) * this.fh;
     ctx.drawImage(src, sx, sy, this.fw, this.fh, cx - size / 2, cy - size / 2, size, size);
   }
+}
+
+// The 2 MB sheet decode + 1024x1024 background-key flood-fill is expensive, so
+// share one instance across the home screen and the game (decode/key runs once).
+let shared: Sprites | null = null;
+export function getSprites(): Sprites {
+  return (shared ??= new Sprites());
+}
+
+/** SSR-safe reduced-motion probe, shared by the renderer and home critters. */
+export function prefersReducedMotion(): boolean {
+  return typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 }

@@ -8,6 +8,7 @@ function ac(): AudioContext | null {
     try {
       ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     } catch {
+      enabled = false; // no WebAudio in this browser — stop retrying
       return null;
     }
   }
@@ -129,6 +130,7 @@ function playAnimal(emoji: string): void {
 }
 
 // ---- subtle, random ambience ----
+let unlocked = false; // a user gesture has satisfied the autoplay policy
 let ambientAnimals: string[] = [];
 let ambientTimer: number | null = null;
 function scheduleAmbient(): void {
@@ -144,6 +146,12 @@ function scheduleAmbient(): void {
     5000 + Math.random() * 9000, // every 5-14s
   );
 }
+function stopAmbient(): void {
+  if (ambientTimer !== null) {
+    window.clearTimeout(ambientTimer);
+    ambientTimer = null;
+  }
+}
 
 export const sfx = {
   setEnabled(v: boolean) {
@@ -157,11 +165,21 @@ export const sfx = {
   isEnabled() {
     return enabled;
   },
-  /** Call from a user gesture to satisfy autoplay policies (starts music + audio ctx). */
+  /** Call from a user gesture to satisfy autoplay policies (unlocks the audio ctx). */
   unlock() {
+    unlocked = true;
     ac();
+  },
+  /** Start gameplay audio (music loop + animal ambience). Safe to call repeatedly. */
+  startMusic() {
+    if (!unlocked) return;
     if (enabled) void ensureMusic().play().catch(() => {});
     if (ambientTimer === null) scheduleAmbient();
+  },
+  /** Stop gameplay audio when leaving a game (back to the menu). */
+  stopMusic() {
+    music?.pause();
+    stopAmbient();
   },
   /** The set of livestock currently grazing on the board (drives random ambience). */
   setAnimals(animals: Iterable<string>) {

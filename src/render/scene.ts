@@ -8,8 +8,9 @@ import {
 } from "../game/constants";
 import type { Cell, Colour, PlacedCell } from "../game/types";
 import { key } from "../game/types";
-import { DIRS } from "../game/board";
-import { Sprites } from "./sprites";
+import { fields } from "../game/scoring";
+import { makeRng } from "../game/rng";
+import { getSprites, prefersReducedMotion } from "./sprites";
 
 interface Ghost {
   cells: PlacedCell[];
@@ -36,6 +37,7 @@ const TAP_SLOP = 12; // px of finger drift still treated as a tap (not a pan)
 const POP_MS = 320; // tile placement pop-in
 const ACRE_POP_MS = 1300; // floating "+N acres" lifetime
 const BURST_MS = 1100; // enclosure celebration spark lifetime
+const IDLE_FRAME_MS = 1000 / 30; // cap ambient-livestock redraws at ~30fps
 
 export class Scene {
   private ctx: CanvasRenderingContext2D;
@@ -58,6 +60,7 @@ export class Scene {
   private tCamY = 0;
   private userMoved = false;
   private needsDraw = true;
+  private lastDraw = 0; // perf.now() of the previous draw (for idle-animation throttle)
 
   tapHandler: ((x: number, y: number) => void) | null = null;
   hoverHandler: ((x: number, y: number) => void) | null = null;
@@ -68,11 +71,10 @@ export class Scene {
   private onResize = () => this.resize();
   private t = 0; // current frame time, for idle animations
   private lastT = 0;
-  private sprites = new Sprites();
+  private sprites = getSprites();
   private critters = new Map<string, Critter>(); // home-cell key -> roaming animal
   private critterComp = new Map<string, string[]>(); // enclosed cell -> its field's cells
-  private reduceMotion =
-    typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  private reduceMotion = prefersReducedMotion();
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
@@ -82,9 +84,19 @@ export class Scene {
     const loop = () => {
       if (!this.alive) return;
       const moving = this.stepCamera();
+      const now = performance.now();
+      const transient =
+        this.needsDraw || this.flash.size || this.acrePops.length || this.bursts.length || this.animating();
       const idleAnimals = !this.reduceMotion && this.acres.size > 0;
-      if (moving || this.needsDraw || this.flash.size || this.acrePops.length || this.bursts.length || this.animating() || idleAnimals)
+      // Real-time animation (camera ease, acre pops, bursts) draws every frame.
+      // Ambient livestock only needs ~30fps, so throttle that path to halve render
+      // work on 60Hz displays (and cut it further on 120Hz) once a field is claimed.
+      let drawNow = moving || transient;
+      if (!drawNow && idleAnimals && now - this.lastDraw >= IDLE_FRAME_MS) drawNow = true;
+      if (drawNow) {
         this.draw();
+        this.lastDraw = now;
+      }
       this.rafId = requestAnimationFrame(loop);
     };
     this.rafId = requestAnimationFrame(loop);
@@ -165,28 +177,10 @@ export class Scene {
 
   /** Keep ~one free-range animal per enclosed cell, grouped by field for roaming. */
   private rebuildCritters(): void {
-    // connected components of the enclosed region (each = one field)
+    // connected components of the enclosed region (each = one field), using the
+    // engine's own field grouping so the two never diverge
     this.critterComp = new Map();
-    const seen = new Set<string>();
-    for (const start of this.enclosed) {
-      if (seen.has(start)) continue;
-      const group: string[] = [];
-      const stack = [start];
-      seen.add(start);
-      while (stack.length) {
-        const c = stack.pop()!;
-        group.push(c);
-        const [x, y] = c.split(",").map(Number);
-        for (const [dx, dy] of DIRS) {
-          const nk = key(x + dx, y + dy);
-          if (this.enclosed.has(nk) && !seen.has(nk)) {
-            seen.add(nk);
-            stack.push(nk);
-          }
-        }
-      }
-      for (const c of group) this.critterComp.set(c, group);
-    }
+    for (const group of fields(this.enclosed)) for (const c of group) this.critterComp.set(c, group);
     // drop critters whose home is no longer enclosed
     for (const home of [...this.critters.keys()]) if (!this.enclosed.has(home)) this.critters.delete(home);
     // spawn one per newly-claimed cell
@@ -194,8 +188,10 @@ export class Scene {
       const owner = this.acres.get(k);
       if (!owner || this.critters.has(k)) continue;
       const [x, y] = k.split(",").map(Number);
-      // a freshly-claimed field: the animal hops with joy for a moment
-      const happy = this.reduceMotion ? 0 : this.t + 1500 + Math.random() * 700;
+      // a freshly-claimed field: the animal hops with joy for a moment.
+      // use the real clock (not this.t, which is stale before the first draw,
+      // e.g. when syncBoard runs during a resume) so the jump actually fires.
+      const happy = this.reduceMotion ? 0 : performance.now() + 1500 + Math.random() * 700;
       this.critters.set(k, {
         animal: owner.animal,
         x: x + 0.5,
@@ -379,11 +375,7 @@ export class Scene {
     let sx = 0;
     let sy = 0;
     let n = 0;
-    let s = (hash(Math.round(now), n) >>> 0) || 1;
-    const rand = () => {
-      s = (s * 1664525 + 1013904223) >>> 0;
-      return s / 4294967296;
-    };
+    const rand = makeRng(hash(Math.round(now), n));
     for (const k of cells) {
       this.flash.set(k, now);
       const [x, y] = k.split(",").map(Number);
@@ -771,10 +763,9 @@ export class Scene {
     ctx.clip();
     ctx.strokeStyle = "rgba(0,0,0,0.18)";
     ctx.lineWidth = Math.max(1, s * 0.02);
-    let g = seed >>> 0;
+    const grain = makeRng(seed);
     for (let i = 0; i < 3; i++) {
-      g = (g * 1664525 + 1013904223) >>> 0;
-      const gy = py + gap + ((g / 4294967296) * (s - gap * 2));
+      const gy = py + gap + grain() * (s - gap * 2);
       ctx.beginPath();
       ctx.moveTo(px + gap, gy);
       ctx.bezierCurveTo(px + s * 0.35, gy - s * 0.03, px + s * 0.65, gy + s * 0.03, px + s - gap, gy);
@@ -821,11 +812,7 @@ function easeOutBack(p: number): number {
 
 /** Build a spiky, irregular "paint splat" path (alternating long/short spikes). */
 function splatPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number, seed: number) {
-  let s = seed >>> 0;
-  const rand = () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 4294967296;
-  };
+  const rand = makeRng(seed);
   const spikes = 11;
   ctx.beginPath();
   for (let i = 0; i < spikes; i++) {

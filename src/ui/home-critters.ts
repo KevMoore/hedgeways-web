@@ -1,4 +1,4 @@
-import { Sprites } from "../render/sprites";
+import { getSprites, prefersReducedMotion } from "../render/sprites";
 
 /**
  * Animate the four livestock chips on the home screen with the real sprites
@@ -6,9 +6,8 @@ import { Sprites } from "../render/sprites";
  * Returns a stop() to cancel the loop when leaving the screen.
  */
 export function mountHomeCritters(spans: HTMLElement[]): () => void {
-  const sprites = new Sprites();
-  const reduce =
-    typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const sprites = getSprites();
+  const reduce = prefersReducedMotion();
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const SIZE = 40;
 
