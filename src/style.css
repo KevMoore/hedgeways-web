@@ -539,12 +539,36 @@ body {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 600px) {
+  /* compact top bar so 3-4 farmers fit without a tall header */
+  .hud {
+    gap: 6px;
+    padding: 6px 8px;
+  }
   .hud .brand {
-    font-size: 18px;
+    display: none; /* reclaim width on mobile (logo lives on the start screen) */
+  }
+  .players {
+    gap: 5px;
+    flex: 1;
   }
   .pchip {
     font-size: 12px;
     padding: 3px 7px;
+    gap: 5px;
+    border-left-width: 3px;
+  }
+  .pchip .pname {
+    display: none; /* animal + colour accent already identify the farmer */
+  }
+  .pchip .pscore {
+    font-size: 14px;
+  }
+  .bag {
+    font-size: 11px;
+  }
+  .icon {
+    width: 34px;
+    height: 34px;
   }
 }

@@ -373,7 +373,8 @@ export class GameUI {
       chip.className = "pchip" + (active ? " active" : "") + (p.score === lead && lead > 0 ? " lead" : "");
       chip.style.setProperty("--pc", p.colour);
       chip.innerHTML =
-        `<span class="pname">${active ? "▶ " : ""}${p.animal} ${p.name}</span>` +
+        `<span class="panimal">${p.animal}</span>` +
+        `<span class="pname">${p.name}</span>` +
         `<span class="pscore">${p.score}<small>🌿</small></span>`;
       ps.appendChild(chip);
       // pop the score when it just increased
