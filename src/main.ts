@@ -7,6 +7,7 @@ import type { GameConfig, GameSnapshot } from "./game/game";
 import { describeSave, loadActive } from "./game/persistence";
 import { PLAYER_KITS } from "./game/constants";
 import { mountHomeCritters } from "./ui/home-critters";
+import { sfx } from "./audio";
 
 const app = document.getElementById("app")!;
 let ui: GameUI | null = null;
@@ -18,6 +19,7 @@ function teardown(): void {
   ui = null;
   stopHome?.();
   stopHome = null;
+  sfx.setAnimals([]); // no critter ambience on the menu
 }
 
 function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
@@ -165,6 +167,9 @@ function renderStart(): void {
   gsap.from(".start > *", { y: 16, opacity: 0, duration: 0.5, ease: "back.out(1.6)", stagger: 0.07 });
   gsap.from(".hedge-row span", { scale: 0, opacity: 0, duration: 0.5, ease: "back.out(2.5)", stagger: 0.08, delay: 0.15 });
 }
+
+// start audio on the first user gesture (autoplay policy)
+window.addEventListener("pointerdown", () => sfx.unlock(), { once: true });
 
 // expose a pre-game hook for e2e
 (window as any).__hedge = { newGame: (c: GameConfig) => startGame(c) };

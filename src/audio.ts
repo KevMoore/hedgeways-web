@@ -1,4 +1,4 @@
-/** Procedural WebAudio SFX — no assets. */
+/** WebAudio SFX (procedural) + looping music + subtle, random animal ambience. */
 let ctx: AudioContext | null = null;
 let enabled = true;
 
@@ -8,7 +8,6 @@ function ac(): AudioContext | null {
     try {
       ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     } catch {
-      enabled = false;
       return null;
     }
   }
@@ -32,12 +31,145 @@ function tone(freq: number, dur: number, type: OscillatorType, gain = 0.12, when
   osc.stop(t + dur + 0.02);
 }
 
+// ---- background music ----
+let music: HTMLAudioElement | null = null;
+function ensureMusic(): HTMLAudioElement {
+  if (!music) {
+    music = new Audio("/audio/hedgebuilder-hoedown.mp3");
+    music.loop = true;
+    music.volume = 0.18; // gentle background
+  }
+  return music;
+}
+
+// ---- animal samples (optional drop-ins) with a procedural fallback ----
+const ANIMAL_FILE: Record<string, string> = { "🐷": "pig", "🐮": "cow", "🐑": "sheep", "🐓": "chicken" };
+const samples = new Map<string, { el: HTMLAudioElement; ok: boolean }>();
+function sampleFor(emoji: string): { el: HTMLAudioElement; ok: boolean } | null {
+  const name = ANIMAL_FILE[emoji];
+  if (!name) return null;
+  let s = samples.get(emoji);
+  if (!s) {
+    const el = new Audio(`/audio/animals/${name}.mp3`);
+    s = { el, ok: false };
+    el.addEventListener("canplaythrough", () => (s!.ok = true), { once: true });
+    el.addEventListener("error", () => (s!.ok = false), { once: true });
+    samples.set(emoji, s);
+  }
+  return s;
+}
+
+/** Procedural fallback calls — crude but recognisable, kept quiet + short. */
+function synthAnimal(emoji: string): void {
+  switch (emoji) {
+    case "🐷": // oink-oink
+      tone(170, 0.12, "sawtooth", 0.05);
+      tone(150, 0.12, "sawtooth", 0.05, 0.16);
+      break;
+    case "🐮": // moo (falling)
+      {
+        const a = ac();
+        if (!a) return;
+        const t = a.currentTime;
+        const o = a.createOscillator();
+        const g = a.createGain();
+        o.type = "sine";
+        o.frequency.setValueAtTime(160, t);
+        o.frequency.exponentialRampToValueAtTime(110, t + 0.5);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.06, t + 0.05);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+        o.connect(g).connect(a.destination);
+        o.start(t);
+        o.stop(t + 0.62);
+      }
+      break;
+    case "🐑": // baa (with wobble)
+      {
+        const a = ac();
+        if (!a) return;
+        const t = a.currentTime;
+        const o = a.createOscillator();
+        const lfo = a.createOscillator();
+        const lg = a.createGain();
+        const g = a.createGain();
+        o.type = "sawtooth";
+        o.frequency.value = 330;
+        lfo.frequency.value = 18;
+        lg.gain.value = 18;
+        lfo.connect(lg).connect(o.frequency);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.045, t + 0.04);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+        o.connect(g).connect(a.destination);
+        lfo.start(t);
+        o.start(t);
+        o.stop(t + 0.42);
+        lfo.stop(t + 0.42);
+      }
+      break;
+    case "🐓": // cluck
+      tone(900, 0.04, "square", 0.04);
+      tone(1150, 0.05, "square", 0.04, 0.07);
+      break;
+  }
+}
+
+function playAnimal(emoji: string): void {
+  if (!enabled) return;
+  const s = sampleFor(emoji);
+  if (s && s.ok) {
+    const clip = s.el.cloneNode() as HTMLAudioElement;
+    clip.volume = 0.22;
+    clip.playbackRate = 0.92 + Math.random() * 0.16;
+    void clip.play().catch(() => {});
+  } else {
+    synthAnimal(emoji);
+  }
+}
+
+// ---- subtle, random ambience ----
+let ambientAnimals: string[] = [];
+let ambientTimer: number | null = null;
+function scheduleAmbient(): void {
+  if (ambientTimer !== null) window.clearTimeout(ambientTimer);
+  ambientTimer = window.setTimeout(
+    () => {
+      // random subtleness: not every tick fires, and only one animal at a time
+      if (enabled && ambientAnimals.length && Math.random() < 0.65) {
+        playAnimal(ambientAnimals[Math.floor(Math.random() * ambientAnimals.length)]);
+      }
+      scheduleAmbient();
+    },
+    5000 + Math.random() * 9000, // every 5-14s
+  );
+}
+
 export const sfx = {
   setEnabled(v: boolean) {
     enabled = v;
+    const m = music;
+    if (m) {
+      if (v) void m.play().catch(() => {});
+      else m.pause();
+    }
   },
   isEnabled() {
     return enabled;
+  },
+  /** Call from a user gesture to satisfy autoplay policies (starts music + audio ctx). */
+  unlock() {
+    ac();
+    if (enabled) void ensureMusic().play().catch(() => {});
+    if (ambientTimer === null) scheduleAmbient();
+  },
+  /** The set of livestock currently grazing on the board (drives random ambience). */
+  setAnimals(animals: Iterable<string>) {
+    ambientAnimals = [...new Set(animals)];
+  },
+  /** One animal call, e.g. when a field is sealed. */
+  celebrate(animal: string) {
+    playAnimal(animal);
   },
   place() {
     tone(220 + Math.random() * 40, 0.12, "triangle", 0.1);

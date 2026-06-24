@@ -123,6 +123,7 @@ export class GameUI {
     if (scored > 0) {
       this.scene.flashEnclosed(newly, actor.animal, actor.colour);
       sfx.score(scored);
+      sfx.celebrate(actor.animal);
       callout(`${actor.animal} ${actor.name} encloses ${scored} acre${scored === 1 ? "" : "s"}!`, "score");
     } else {
       sfx.place();
@@ -318,7 +319,9 @@ export class GameUI {
   }
 
   private syncScene(): void {
-    this.scene.syncBoard(this.workingCells(), this.game.board.enclosed, this.acresMap());
+    const acres = this.acresMap();
+    this.scene.syncBoard(this.workingCells(), this.game.board.enclosed, acres);
+    sfx.setAnimals([...acres.values()].map((a) => a.animal)); // drive random ambience
   }
 
   /** enclosed cell -> the owning farmer's colour + animal, for the renderer */
