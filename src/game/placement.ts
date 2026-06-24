@@ -23,7 +23,10 @@ export function validateMove(board: Board, tiles: PlacedTile[]): ValidationResul
 
   // map cell -> tileId for this move, and detect overlaps / occupied / enclosed
   const moveCells = new Map<string, { colour: PlacedCell["colour"]; tileId: number }>();
+  const tileIds = new Set<number>();
   for (const t of tiles) {
+    if (tileIds.has(t.tileId)) return { ok: false, reason: "a hedge cannot be laid twice" };
+    tileIds.add(t.tileId);
     if (t.cells.length !== 3) return { ok: false, reason: "tile must cover 3 cells" };
     for (const c of t.cells) {
       const k = key(c.x, c.y);

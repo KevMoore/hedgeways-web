@@ -8,7 +8,14 @@ import { describeSave, loadActive } from "./game/persistence";
 const app = document.getElementById("app")!;
 let ui: GameUI | null = null;
 
+/** Dispose any running game (stop its render loop + bot timers) before swapping the screen. */
+function teardown(): void {
+  ui?.dispose();
+  ui = null;
+}
+
 function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
+  teardown();
   const opts = {
     onQuit: () => renderStart(),
     onRestart: (c: GameConfig) => startGame(c),
@@ -27,6 +34,7 @@ function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
 const DIFFS: Difficulty[] = ["easy", "medium", "hard", "expert"];
 
 function renderStart(): void {
+  teardown();
   const saved = loadActive();
   const resumable = saved && !saved.gameOver ? saved : null;
   app.innerHTML = `

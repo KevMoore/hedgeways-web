@@ -37,6 +37,8 @@ export class GameUI {
   private oriIndex = 0;
   private busy = false;
   private invalidTimer: number | null = null;
+  private botTimer: number | null = null;
+  private alive = true;
   /** tappable cell -> the placement that would result (covers any of the hedge's cells) */
   private placementByCell = new Map<string, PlacedTile>();
 
@@ -85,7 +87,7 @@ export class GameUI {
       this.setStatus(`${p.name} is planning…`);
       this.renderHand(true);
       this.updateButtons();
-      window.setTimeout(() => this.botMove(), 480);
+      this.botTimer = window.setTimeout(() => this.botMove(), 480);
       return;
     }
     // human
@@ -100,8 +102,10 @@ export class GameUI {
   }
 
   private botMove(): void {
-    if (this.game.gameOver) return;
-    const move = chooseAiMove(this.game, { iterations: 200 });
+    this.botTimer = null;
+    if (!this.alive || this.game.gameOver || !this.game.currentPlayer.isBot) return;
+    const move = chooseAiMove(this.game);
+    if (!this.alive) return; // torn down while the (synchronous) search ran
     const name = this.game.currentPlayer.name;
     if (!move) {
       this.game.pass();
@@ -127,7 +131,7 @@ export class GameUI {
   // ---- human input ----
   private onTapCell(x: number, y: number): void {
     if (this.busy || this.game.currentPlayer.isBot) return;
-    if (this.selectedId == null) return;
+    if (this.selectedId == null || this.pending.length >= MAX_LAY) return;
     // tap ANY cell a legal placement would cover
     const candidate = this.placementByCell.get(key(x, y));
     if (candidate) {
@@ -386,6 +390,14 @@ export class GameUI {
     (e.currentTarget as HTMLElement).textContent = on ? "🔊" : "🔇";
   }
 
+  /** Tear down: stop the render loop, cancel pending bot/animation timers. */
+  dispose(): void {
+    this.alive = false;
+    if (this.botTimer !== null) window.clearTimeout(this.botTimer);
+    if (this.invalidTimer !== null) window.clearTimeout(this.invalidTimer);
+    this.scene.destroy();
+  }
+
   private restart(): void {
     clearActive();
     const fresh: GameConfig = {
@@ -467,7 +479,7 @@ export class GameUI {
   /** Play one legal move (or pass) for the current player; returns true if a move was laid. */
   autoPlayTurn(): boolean {
     if (this.game.gameOver) return false;
-    const moves = generateMoves(this.game.board, this.game.currentPlayer.hand, { limit: 1 });
+    const moves = generateMoves(this.game.board, this.game.currentPlayer.hand, { limit: 1, maxNodes: Infinity });
     if (moves.length === 0) {
       this.game.pass();
       this.syncScene();

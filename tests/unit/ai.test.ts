@@ -23,6 +23,19 @@ describe("snapshot", () => {
     // restored game can still produce a legal move
     expect(restored.legalMoves(1).length).toBeGreaterThanOrEqual(0);
   });
+
+  it("does not alias live game state (snapshot is a deep copy)", () => {
+    const g = new Game({ seed: 5, players: [{ name: "A", isBot: true }, { name: "B", isBot: true }] });
+    const snap = g.toSnapshot();
+    const handBefore = snap.players[g.current].hand.length;
+    const cellsBefore = snap.cells.length;
+    // mutate the live game
+    const m = g.legalMoves(1)[0];
+    if (m) g.commit(m);
+    // the snapshot taken earlier must be unchanged
+    expect(snap.players[snap.current].hand.length).toBe(handBefore);
+    expect(snap.cells.length).toBe(cellsBefore);
+  });
 });
 
 function placedTileCount(game: Game): number {

@@ -39,17 +39,31 @@ export class Scene {
   hoverHandler: ((x: number, y: number) => void) | null = null;
   leaveHandler: (() => void) | null = null;
   private hoverCell = "";
+  private rafId = 0;
+  private alive = true;
+  private onResize = () => this.resize();
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
     this.bindInput();
     this.resize();
-    window.addEventListener("resize", () => this.resize());
+    window.addEventListener("resize", this.onResize);
     const loop = () => {
+      if (!this.alive) return;
       if (this.needsDraw || this.flash.size || this.acrePops.length || this.animating()) this.draw();
-      requestAnimationFrame(loop);
+      this.rafId = requestAnimationFrame(loop);
     };
-    requestAnimationFrame(loop);
+    this.rafId = requestAnimationFrame(loop);
+  }
+
+  /** Stop the render loop and detach listeners (call when the game is torn down). */
+  destroy(): void {
+    this.alive = false;
+    cancelAnimationFrame(this.rafId);
+    window.removeEventListener("resize", this.onResize);
+    this.tapHandler = null;
+    this.hoverHandler = null;
+    this.leaveHandler = null;
   }
 
   private animating(): boolean {
@@ -149,6 +163,7 @@ export class Scene {
   }
 
   resize(): void {
+    this.dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1)); // may change across displays
     const r = this.canvas.getBoundingClientRect();
     this.canvas.width = Math.round(r.width * this.dpr);
     this.canvas.height = Math.round(r.height * this.dpr);

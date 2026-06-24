@@ -95,6 +95,20 @@ test.describe("Hedgeways smoke", () => {
     expect(scores.every((s: number) => s === 0)).toBe(true);
   });
 
+  test("quitting mid-bot-turn tears down cleanly (no stale game)", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#play").click();
+    // play the human turn so it's now a bot's turn (bot move scheduled on a timer)
+    await page.evaluate(() => (window as any).__hedge.autoPlayTurn());
+    await page.locator("#btn-quit").click();
+    await page.locator("#q-ok").click(); // quit to menu
+    await expect(page.locator(".start")).toBeVisible();
+    // wait past the bot's 480ms timer; the disposed game must not re-render a board
+    await page.waitForTimeout(800);
+    await expect(page.locator(".start")).toBeVisible();
+    await expect(page.locator(".game")).toHaveCount(0);
+  });
+
   test("how-to modal opens and closes", async ({ page }) => {
     await page.goto("/");
     await page.locator("#how").click();

@@ -58,10 +58,10 @@ export class Game {
   }
 
   private load(s: GameSnapshot): void {
-    this.board.cells = new Map(s.cells);
+    this.board.cells = new Map(s.cells.map(([k, c]) => [k, { ...c }]));
     this.board.enclosed = new Set(s.enclosed);
-    this.bag = s.bag;
-    this.players = s.players;
+    this.bag = s.bag.map((t) => ({ id: t.id, segments: [...t.segments] }));
+    this.players = s.players.map((p) => ({ ...p, hand: p.hand.map((t) => ({ id: t.id, segments: [...t.segments] })) }));
     this.current = s.current;
     this.turn = s.turn;
     this.gameOver = s.gameOver;
@@ -69,14 +69,15 @@ export class Game {
     this.consecutivePasses = s.passes;
   }
 
-  /** Serializable snapshot of the whole game (for save/resume). */
+  /** Deep, serializable snapshot of the whole game (for save/resume) — never aliases live state. */
   toSnapshot(): GameSnapshot {
+    const tile = (t: Tile): Tile => ({ id: t.id, segments: [...t.segments] });
     return {
-      config: this.config,
-      cells: [...this.board.cells.entries()],
+      config: { players: this.config.players.map((p) => ({ ...p })), seed: this.config.seed },
+      cells: [...this.board.cells.entries()].map(([k, c]) => [k, { ...c }]),
       enclosed: [...this.board.enclosed],
-      bag: this.bag,
-      players: this.players,
+      bag: this.bag.map(tile),
+      players: this.players.map((p) => ({ ...p, hand: p.hand.map(tile) })),
       current: this.current,
       turn: this.turn,
       gameOver: this.gameOver,
@@ -102,11 +103,12 @@ export class Game {
   }
 
   legalMoves(limit?: number): Move[] {
-    return generateMoves(this.board, this.currentPlayer.hand, { limit });
+    return generateMoves(this.board, this.currentPlayer.hand, { limit, maxNodes: Infinity });
   }
 
+  // exhaustive (no node cap) so the effort cap can never cause a false "must pass"
   hasLegalMove(): boolean {
-    return generateMoves(this.board, this.currentPlayer.hand, { limit: 1 }).length > 0;
+    return generateMoves(this.board, this.currentPlayer.hand, { limit: 1, maxNodes: Infinity }).length > 0;
   }
 
   /** Commit a turn for the current player. */

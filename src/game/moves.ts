@@ -70,7 +70,7 @@ export interface GenOptions {
 export function generateMoves(board: Board, hand: Tile[], opts: GenOptions = {}): Move[] {
   const maxLay = Math.min(opts.maxLay ?? 3, hand.length);
   const limit = opts.limit ?? Infinity;
-  const maxNodes = opts.maxNodes ?? 12000;
+  const maxNodes = opts.maxNodes ?? 50000;
   let nodes = 0;
   const results: Move[] = [];
   const seen = new Set<string>();

@@ -88,6 +88,16 @@ describe("placement (Qwirkle-strict)", () => {
     expect(validateMove(b, tiles.slice(0, 3)).ok).toBe(true);
   });
 
+  it("rejects laying the same hedge twice in one turn", () => {
+    const b = new Board();
+    const t = tile(1, "GGG");
+    const dup: PlacedTile[] = [
+      { tileId: 1, cells: orient(t, 0, 0, "H", false) },
+      { tileId: 1, cells: orient(t, 0, 1, "H", false) },
+    ];
+    expect(validateMove(b, dup).ok).toBe(false);
+  });
+
   it("rejects a tile not linked to anything", () => {
     const b = new Board();
     const t1 = tile(1, "GYB");
