@@ -24,6 +24,7 @@ interface Critter {
   ty: number;
   state: "walk" | "graze" | "idle";
   until: number;
+  walkStart: number; // for anti-stuck timeout
   facing: number; // 1 right, -1 left
   phase: number;
 }
@@ -200,6 +201,7 @@ export class Scene {
         ty: y + 0.5,
         state: "idle",
         until: this.t + Math.random() * 1500,
+        walkStart: 0,
         facing: Math.random() < 0.5 ? -1 : 1,
         phase: Math.random(),
       });
@@ -213,29 +215,54 @@ export class Scene {
         const dx = c.tx - c.x;
         const dy = c.ty - c.y;
         const d = Math.hypot(dx, dy);
-        if (d < 0.06) {
+        const inField = (x: number, y: number) => this.enclosed.has(key(Math.floor(x), Math.floor(y)));
+        if (d < 0.06 || this.t - c.walkStart > 4000) {
+          // arrived, or anti-stuck timeout -> rest then pick a new target
           c.state = Math.random() < 0.6 ? "graze" : "idle";
-          c.until = this.t + 900 + Math.random() * 2400;
+          c.until = this.t + 800 + Math.random() * 2200;
         } else {
           const sp = Math.min(d, 0.0013 * dt);
-          const nx = c.x + (dx / d) * sp;
-          const ny = c.y + (dy / d) * sp;
-          if (this.enclosed.has(key(Math.floor(nx), Math.floor(ny)))) {
-            c.x = nx;
-            c.y = ny;
+          const ux = dx / d;
+          const uy = dy / d;
+          // try straight, then slide along a wall (x-only / y-only) for concave fields
+          let moved = false;
+          if (inField(c.x + ux * sp, c.y + uy * sp)) {
+            c.x += ux * sp;
+            c.y += uy * sp;
+            moved = true;
+          } else if (Math.abs(ux) > 0.01 && inField(c.x + ux * sp, c.y)) {
+            c.x += ux * sp;
+            moved = true;
+          } else if (Math.abs(uy) > 0.01 && inField(c.x, c.y + uy * sp)) {
+            c.y += uy * sp;
+            moved = true;
+          }
+          if (moved) {
             if (Math.abs(dx) > 0.02) c.facing = dx < 0 ? -1 : 1;
           } else {
-            c.state = "idle"; // hit a hedge — pause then retarget (can't escape)
-            c.until = this.t + 300;
+            c.state = "idle"; // boxed in this instant — rest briefly then retarget
+            c.until = this.t + 250;
           }
         }
       } else if (this.t >= c.until) {
         const cells = this.critterComp.get(key(Math.floor(c.x), Math.floor(c.y)));
         if (cells && cells.length) {
-          const [tx, ty] = cells[Math.floor(Math.random() * cells.length)].split(",").map(Number);
+          // prefer a nearby cell so paths rarely cross hedges
+          const here = [Math.floor(c.x), Math.floor(c.y)];
+          let pick = cells[Math.floor(Math.random() * cells.length)];
+          for (let tries = 0; tries < 4; tries++) {
+            const cand = cells[Math.floor(Math.random() * cells.length)];
+            const [px, py] = cand.split(",").map(Number);
+            if (Math.abs(px - here[0]) + Math.abs(py - here[1]) <= 4) {
+              pick = cand;
+              break;
+            }
+          }
+          const [tx, ty] = pick.split(",").map(Number);
           c.tx = tx + 0.25 + Math.random() * 0.5;
           c.ty = ty + 0.25 + Math.random() * 0.5;
           c.state = "walk";
+          c.walkStart = this.t;
         } else {
           c.until = this.t + 1000;
         }
@@ -243,7 +270,7 @@ export class Scene {
     }
 
     // basic collision: push overlapping animals apart (but never out of the field)
-    const min = 0.46;
+    const min = 0.38;
     const min2 = min * min;
     const inField = (x: number, y: number) => this.enclosed.has(key(Math.floor(x), Math.floor(y)));
     for (let i = 0; i < list.length; i++) {
@@ -260,24 +287,25 @@ export class Scene {
           d2 = 1e-4;
         }
         const d = Math.sqrt(d2);
-        const push = (min - d) / 2;
+        const overlap = min - d;
         const ux = dx / d;
         const uy = dy / d;
-        if (inField(a.x - ux * push, a.y - uy * push)) {
-          a.x -= ux * push;
-          a.y -= uy * push;
-        }
-        if (inField(b.x + ux * push, b.y + uy * push)) {
-          b.x += ux * push;
-          b.y += uy * push;
-        }
+        const aCan = inField(a.x - ux * overlap, a.y - uy * overlap);
+        const bCan = inField(b.x + ux * overlap, b.y + uy * overlap);
+        // split the push normally; if one is wedged against a hedge, the other takes it all
+        const aShare = aCan ? (bCan ? 0.5 : 1) : 0;
+        const bShare = bCan ? (aCan ? 0.5 : 1) : 0;
+        a.x -= ux * overlap * aShare;
+        a.y -= uy * overlap * aShare;
+        b.x += ux * overlap * bShare;
+        b.y += uy * overlap * bShare;
       }
     }
   }
 
   private drawCritters(): void {
     const ctx = this.ctx;
-    const size = this.scale * 0.58;
+    const size = this.scale * 0.46;
     const ordered = [...this.critters.values()].sort((a, b) => a.y - b.y); // back-to-front
     for (const c of ordered) {
       const [px, py] = this.worldToScreen(c.x, c.y);

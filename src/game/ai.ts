@@ -10,7 +10,6 @@ import { key } from "./types";
 type Rng = () => number;
 
 const BREADTH: Record<Difficulty, number> = { easy: 24, medium: 48, hard: 80, expert: 80 };
-const THREAT_TOP_K: Record<Difficulty, number> = { easy: 0, medium: 6, hard: 12, expert: 16 };
 
 /** Apply a move to a board clone and return its acres-gained. Mutates the clone's enclosed. */
 function applyAndScore(board: Board, move: Move): number {
@@ -27,10 +26,18 @@ function applyAndScore(board: Board, move: Move): number {
  * hedge neighbours OR enclosed-by-3 plus one near-empty). Avoids per-frontier
  * flood-fills.
  */
-function nearClosedCount(board: Board): number {
-  if (board.size === 0) return 0;
+/**
+ * Per-empty-cell wall stats around the hedges:
+ *  - pens:    empties with exactly 2 orthogonal walls (a field taking shape)
+ *  - threats: empties with >=3 orthogonal walls (a near-done field a rival could grab)
+ * Rewarding pens makes bots build toward enclosures; penalising threats stops
+ * them gifting an almost-finished field to the next player (closer-takes-all).
+ */
+function pocketStats(board: Board): { pens: number; threats: number } {
+  let pens = 0;
+  let threats = 0;
+  if (board.size === 0) return { pens, threats };
   const seen = new Set<string>();
-  let count = 0;
   for (const k of board.cells.keys()) {
     const [x, y] = k.split(",").map(Number);
     for (const [dx, dy] of DIRS) {
@@ -41,10 +48,11 @@ function nearClosedCount(board: Board): number {
       seen.add(ek);
       let walls = 0;
       for (const [ax, ay] of DIRS) if (board.cells.has(key(ex + ax, ey + ay))) walls++;
-      if (walls >= 3) count++;
+      if (walls >= 3) threats++;
+      else if (walls === 2) pens++;
     }
   }
-  return count;
+  return { pens, threats };
 }
 
 /** Heuristic value of a candidate move from the mover's perspective. */
@@ -52,10 +60,10 @@ function heuristic(board: Board, move: Move, diff: Difficulty): { v: number; gai
   const after = board.clone();
   const gain = applyAndScore(after, move);
   if (diff === "easy") return { v: gain, gain, after };
-  // proxy threat: more near-closed cells = more steals available to next mover
-  const threat = nearClosedCount(after);
-  if (diff === "medium") return { v: gain - 0.4 * threat, gain, after };
-  return { v: gain - 0.7 * threat + 0.05 * move.tiles.length, gain, after };
+  const { pens, threats } = pocketStats(after);
+  if (diff === "medium") return { v: gain - 0.4 * threats + 0.1 * pens, gain, after };
+  // hard/expert: build more aggressively toward closures, lay more tiles, avoid gifts
+  return { v: gain - 0.6 * threats + 0.15 * pens + 0.05 * move.tiles.length, gain, after };
 }
 
 function pickGreedy(board: Board, hand: Tile[], diff: Difficulty, rng: Rng): Move | null {
@@ -64,25 +72,6 @@ function pickGreedy(board: Board, hand: Tile[], diff: Difficulty, rng: Rng): Mov
   if (diff === "easy" && rng() < 0.5) return moves[Math.floor(rng() * moves.length)];
   let best = moves[0];
   let bestV = -Infinity;
-  const topK = THREAT_TOP_K[diff];
-  // for medium/hard, rank by immediate gain first, then re-score top-K with threat term
-  if (topK > 0 && moves.length > topK) {
-    const scored = moves.map((m) => {
-      const after = board.clone();
-      const gain = applyAndScore(after, m);
-      return { m, gain };
-    });
-    scored.sort((a, b) => b.gain - a.gain);
-    const head = scored.slice(0, topK);
-    for (const s of head) {
-      const v = heuristic(board, s.m, diff).v + rng() * 1e-3;
-      if (v > bestV) {
-        bestV = v;
-        best = s.m;
-      }
-    }
-    return best;
-  }
   for (const m of moves) {
     const v = heuristic(board, m, diff).v + rng() * 1e-3;
     if (v > bestV) {

@@ -6,14 +6,18 @@ import type { Difficulty } from "./game/types";
 import type { GameConfig, GameSnapshot } from "./game/game";
 import { describeSave, loadActive } from "./game/persistence";
 import { PLAYER_KITS } from "./game/constants";
+import { mountHomeCritters } from "./ui/home-critters";
 
 const app = document.getElementById("app")!;
 let ui: GameUI | null = null;
+let stopHome: (() => void) | null = null;
 
 /** Dispose any running game (stop its render loop + bot timers) before swapping the screen. */
 function teardown(): void {
   ui?.dispose();
   ui = null;
+  stopHome?.();
+  stopHome = null;
 }
 
 function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
@@ -43,7 +47,7 @@ function renderStart(): void {
     <div class="field" aria-hidden="true">${Array.from({ length: 9 }, (_, i) => `<i style="--i:${i}">${["🌿", "🍃", "🌱"][i % 3]}</i>`).join("")}</div>
     <div class="start">
       <div class="logo">Hedge<span>ways</span></div>
-      <div class="hedge-row" aria-hidden="true">${PLAYER_KITS.map((k, i) => `<span style="--c:${k.colour};--i:${i}">${k.animal}</span>`).join("")}</div>
+      <div class="hedge-row" aria-hidden="true">${PLAYER_KITS.map((k, i) => `<span style="--c:${k.colour};--i:${i}" data-animal="${k.animal}"></span>`).join("")}</div>
       <p class="tag">Lay hedges, enclose fields, claim the most acres of land.</p>
       ${
         resumable
@@ -153,6 +157,9 @@ function renderStart(): void {
     });
     startGame({ players, seed: (Math.random() * 0xffffffff) >>> 0 });
   });
+
+  // animate the livestock chips with the real sprites (idle/graze)
+  stopHome = mountHomeCritters([...app.querySelectorAll<HTMLElement>(".hedge-row span")]);
 
   // staggered entrance
   gsap.from(".start > *", { y: 16, opacity: 0, duration: 0.5, ease: "back.out(1.6)", stagger: 0.07 });
