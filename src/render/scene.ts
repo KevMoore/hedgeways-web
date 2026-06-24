@@ -25,6 +25,7 @@ interface Critter {
   state: "walk" | "graze" | "idle";
   until: number;
   walkStart: number; // for anti-stuck timeout
+  happyUntil: number; // celebrate (jump) just after the field is sealed
   facing: number; // 1 right, -1 left
   phase: number;
 }
@@ -193,6 +194,8 @@ export class Scene {
       const owner = this.acres.get(k);
       if (!owner || this.critters.has(k)) continue;
       const [x, y] = k.split(",").map(Number);
+      // a freshly-claimed field: the animal hops with joy for a moment
+      const happy = this.reduceMotion ? 0 : this.t + 1500 + Math.random() * 700;
       this.critters.set(k, {
         animal: owner.animal,
         x: x + 0.5,
@@ -200,8 +203,9 @@ export class Scene {
         tx: x + 0.5,
         ty: y + 0.5,
         state: "idle",
-        until: this.t + Math.random() * 1500,
+        until: happy + Math.random() * 800,
         walkStart: 0,
+        happyUntil: happy,
         facing: Math.random() < 0.5 ? -1 : 1,
         phase: Math.random(),
       });
@@ -211,6 +215,7 @@ export class Scene {
   private updateCritters(dt: number): void {
     const list = [...this.critters.values()];
     for (const c of list) {
+      if (this.t < c.happyUntil) continue; // celebrating in place — hold position
       if (c.state === "walk") {
         const dx = c.tx - c.x;
         const dy = c.ty - c.y;
@@ -309,11 +314,13 @@ export class Scene {
     const ordered = [...this.critters.values()].sort((a, b) => a.y - b.y); // back-to-front
     for (const c of ordered) {
       const [px, py] = this.worldToScreen(c.x, c.y);
+      const happy = this.t < c.happyUntil;
       const frame = this.reduceMotion
         ? this.sprites.frame(c.animal, "idle", 0, c.phase)
-        : this.sprites.frame(c.animal, c.state, this.t, c.phase);
+        : this.sprites.frame(c.animal, happy ? "happy" : c.state, this.t, c.phase);
+      const jump = happy && !this.reduceMotion ? -Math.abs(Math.sin(this.t / 110 + c.phase * 6)) * size * 0.3 : 0;
       ctx.save();
-      ctx.translate(px, py);
+      ctx.translate(px, py + jump);
       if (c.facing < 0) ctx.scale(-1, 1); // sheet faces right
       this.sprites.drawFrame(ctx, frame, 0, 0, size);
       ctx.restore();

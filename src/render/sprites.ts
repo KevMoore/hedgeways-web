@@ -112,11 +112,12 @@ export class Sprites {
   }
 
   /** Absolute frame index for an animal in a given behaviour state. */
-  frame(animal: string, state: "walk" | "graze" | "idle", timeMs: number, phase: number): number {
+  frame(animal: string, state: "walk" | "graze" | "idle" | "happy", timeMs: number, phase: number): number {
     const a = ANIMALS[animal];
     if (!a) return 0;
-    const seq = state === "walk" ? a.walk : state === "graze" ? a.action : a.idle;
-    const fps = state === "walk" ? 8 : state === "graze" ? 6 : 2;
+    const seq =
+      state === "walk" ? a.walk : state === "graze" ? a.action : state === "happy" ? a.happy : a.idle;
+    const fps = state === "walk" ? 8 : state === "graze" ? 6 : state === "happy" ? 9 : 2;
     const i = Math.floor((timeMs / 1000) * fps + phase * seq.length);
     return seq[((i % seq.length) + seq.length) % seq.length];
   }
