@@ -180,8 +180,8 @@ body {
 }
 .animals button {
   position: relative;
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 78px;
   border: 2px solid #b9c7b2;
   background: #fff;
   border-radius: 12px;
@@ -189,14 +189,17 @@ body {
   line-height: 1;
   padding: 4px;
   display: grid;
-  place-items: center;
+  place-items: end center;
+  overflow: hidden;
 }
 .animals button .apic {
   display: inline-flex;
+  align-items: end;
 }
-.animals button .apic svg {
-  width: 44px;
-  height: 44px;
+.animals button .apic svg,
+.animals button .apic canvas {
+  width: 50px;
+  height: auto;
 }
 .animals button .aani {
   position: absolute;
@@ -220,12 +223,13 @@ body {
 /* HUD score chip: farmer portrait at the left */
 .pfarmer {
   display: inline-flex;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   align-items: center;
   justify-content: center;
 }
-.pfarmer svg {
+.pfarmer svg,
+.pfarmer canvas {
   width: 100%;
   height: 100%;
 }
@@ -233,11 +237,12 @@ body {
 .endfarmer {
   display: inline-flex;
   vertical-align: middle;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 40px;
   margin-right: 4px;
 }
-.endfarmer svg {
+.endfarmer svg,
+.endfarmer canvas {
   width: 100%;
   height: 100%;
 }

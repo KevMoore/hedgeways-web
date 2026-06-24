@@ -7,7 +7,8 @@ import type { GameConfig, GameSnapshot } from "./game/game";
 import { describeSave, loadActive } from "./game/persistence";
 import { PLAYER_KITS } from "./game/constants";
 import { mountHomeCritters } from "./ui/home-critters";
-import { farmerSvg } from "./ui/farmers";
+import { mountFarmerPortrait } from "./ui/farmer-portrait";
+import { getFarmerSprites } from "./render/farmer-sprites";
 import { sfx } from "./audio";
 
 const app = document.getElementById("app")!;
@@ -83,7 +84,7 @@ function renderStart(): void {
           <div class="animals" id="animals">
             ${PLAYER_KITS.map(
               (k, i) =>
-                `<button data-a="${i}" title="${k.farmerName}" style="--pc:${k.colour}"><span class="apic">${farmerSvg(k.farmerId, 38)}</span><span class="aani">${k.animal}</span></button>`,
+                `<button data-a="${i}" data-fid="${k.farmerId}" title="${k.farmerName}" style="--pc:${k.colour}"><span class="apic"></span><span class="aani">${k.animal}</span></button>`,
             ).join("")}
           </div>
         </label>
@@ -141,9 +142,16 @@ function renderStart(): void {
   });
 
   let humanKit = 0;
+  const pickerWidgets: { dispose: () => void }[] = [];
   const animalBtns = app.querySelectorAll<HTMLButtonElement>("#animals button");
-  animalBtns.forEach((b) => {
+  animalBtns.forEach((b, idx) => {
     b.classList.toggle("on", Number(b.dataset.a) === humanKit);
+    const host = b.querySelector<HTMLElement>(".apic");
+    const fid = b.dataset.fid || "";
+    if (host && getFarmerSprites().knows(fid)) {
+      const w = mountFarmerPortrait(host, fid, { size: 50, state: "idle", phase: idx * 0.27 });
+      if (w) pickerWidgets.push(w);
+    }
     b.addEventListener("click", () => {
       humanKit = Number(b.dataset.a);
       animalBtns.forEach((x) => x.classList.toggle("on", x === b));
@@ -179,7 +187,11 @@ function renderStart(): void {
   });
 
   // animate the livestock chips with the real sprites (idle/graze)
-  stopHome = mountHomeCritters([...app.querySelectorAll<HTMLElement>(".hedge-row span")]);
+  const stopCritters = mountHomeCritters([...app.querySelectorAll<HTMLElement>(".hedge-row span")]);
+  stopHome = () => {
+    stopCritters?.();
+    for (const w of pickerWidgets) w.dispose();
+  };
 
   // staggered entrance
   gsap.from(".start > *", { y: 16, opacity: 0, duration: 0.5, ease: "back.out(1.6)", stagger: 0.07 });

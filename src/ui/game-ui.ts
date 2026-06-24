@@ -8,7 +8,8 @@ import type { Cell, Colour, Move, Orientation, PlacedTile, Tile } from "../game/
 import { COLOURS, key } from "../game/types";
 import gsap from "gsap";
 import { sfx } from "../audio";
-import { farmerSvg } from "./farmers";
+import { mountFarmerPortrait } from "./farmer-portrait";
+import { getFarmerSprites } from "../render/farmer-sprites";
 import { Scene } from "../render/scene";
 import { callout, confetti } from "./effects";
 import { showHowTo } from "./howto";
@@ -40,6 +41,8 @@ export class GameUI {
   private busy = false;
   private invalidTimer: number | null = null;
   private botTimer: number | null = null;
+  /** active farmer-portrait raf widgets, disposed before re-render */
+  private farmerWidgets: { dispose: () => void }[] = [];
   private alive = true;
   /** low-bag tiers already announced, so each callout fires at most once */
   private bagWarned = new Set<number>();
@@ -501,6 +504,9 @@ export class GameUI {
 
   private renderHud(): void {
     const ps = this.root.querySelector(".players")!;
+    // dispose any prior farmer canvases before clearing the chips
+    for (const w of this.farmerWidgets) w.dispose();
+    this.farmerWidgets = [];
     ps.innerHTML = "";
     const lead = Math.max(...this.game.players.map((p) => totalScore(p)));
     this.game.players.forEach((p) => {
@@ -510,13 +516,31 @@ export class GameUI {
       chip.className = "pchip" + (active ? " active" : "") + (total === lead && lead > 0 ? " lead" : "");
       chip.style.setProperty("--pc", p.colour);
       const bonusTag = p.bonus > 0 ? `<span class="pbonus" title="${p.score} acres + ${p.bonus} streak">+${p.bonus}🔥</span>` : "";
-      const portrait = p.farmerId ? farmerSvg(p.farmerId, 28) : `<span class="panimal">${p.animal}</span>`;
+      const usingSprite = !!p.farmerId && getFarmerSprites().knows(p.farmerId);
+      const portraitHtml = usingSprite
+        ? `<span class="pfarmer"></span>`
+        : `<span class="panimal">${p.animal}</span>`;
       chip.innerHTML =
-        `<span class="pfarmer">${portrait}</span>` +
+        portraitHtml +
         `<span class="pname">${p.name}</span>` +
         `<span class="pscore">${total}<small>🌿</small></span>` +
         bonusTag;
       ps.appendChild(chip);
+      // Mount the animated farmer head-shot into the placeholder span. Active
+      // player gets idle bob; others render a single static frame (cheap).
+      if (usingSprite && p.farmerId) {
+        const host = chip.querySelector(".pfarmer") as HTMLElement | null;
+        if (host) {
+          const w = mountFarmerPortrait(host, p.farmerId, {
+            size: 30,
+            crop: "head",
+            state: active ? "idle" : "idle",
+            static: !active,
+            phase: p.id * 0.13,
+          });
+          if (w) this.farmerWidgets.push(w);
+        }
+      }
       // pop the score when it just increased
       if (this.prevScores[p.id] !== undefined && total > this.prevScores[p.id]) {
         gsap.fromTo(
@@ -571,6 +595,8 @@ export class GameUI {
     this.alive = false;
     if (this.botTimer !== null) window.clearTimeout(this.botTimer);
     if (this.invalidTimer !== null) window.clearTimeout(this.invalidTimer);
+    for (const w of this.farmerWidgets) w.dispose();
+    this.farmerWidgets = [];
     this.scene.destroy();
   }
 
@@ -683,7 +709,9 @@ export class GameUI {
         <table>${standings
           .map((p, i) => {
             const bonusNote = p.bonus > 0 ? `<small> (${p.score} + ${p.bonus}🔥)</small>` : "";
-            const portrait = p.farmerId ? `<span class="endfarmer">${farmerSvg(p.farmerId, 32)}</span>` : `${p.animal}`;
+            const portrait = p.farmerId && getFarmerSprites().knows(p.farmerId)
+              ? `<span class="endfarmer" data-fid="${p.farmerId}" data-pos="${i}"></span>`
+              : `${p.animal}`;
             return `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${portrait} ${p.name}</td><td>${totalScore(p)} acre${totalScore(p) === 1 ? "" : "s"}${bonusNote}</td></tr>`;
           })
           .join("")}</table>
@@ -694,11 +722,35 @@ export class GameUI {
         </div>
       </div>`;
     this.root.appendChild(back);
-    back.querySelector("#end-inspect")!.addEventListener("click", () => back.remove());
-    back.querySelector("#end-menu")!.addEventListener("click", () =>
-      this.onQuit ? this.onQuit() : location.reload(),
-    );
-    back.querySelector("#end-again")!.addEventListener("click", () => this.restart());
+    // Mount farmer animations into the standings rows — winners get a happy
+    // cheer cycle, others a calmer idle.
+    const podiumWidgets: { dispose: () => void }[] = [];
+    back.querySelectorAll<HTMLElement>(".endfarmer").forEach((host) => {
+      const fid = host.dataset.fid || "";
+      const pos = Number(host.dataset.pos || "999");
+      if (!fid) return;
+      const w = mountFarmerPortrait(host, fid, {
+        size: 36,
+        crop: "full",
+        state: pos === 0 ? "happy" : "idle",
+        phase: pos * 0.31,
+      });
+      if (w) podiumWidgets.push(w);
+    });
+    const closeModal = () => {
+      for (const w of podiumWidgets) w.dispose();
+      back.remove();
+    };
+    back.querySelector("#end-inspect")!.addEventListener("click", closeModal);
+    back.querySelector("#end-menu")!.addEventListener("click", () => {
+      closeModal();
+      if (this.onQuit) this.onQuit();
+      else location.reload();
+    });
+    back.querySelector("#end-again")!.addEventListener("click", () => {
+      closeModal();
+      this.restart();
+    });
   }
 
   // ---- test hook ----
