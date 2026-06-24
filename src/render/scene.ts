@@ -4,7 +4,10 @@ import {
   COLOUR_HEX,
   COLOUR_HEX_DARK,
   FRAME_CRACK_HEX,
-  FRAME_HEX,
+  HEDGE_BASE,
+  HEDGE_DANGER,
+  HEDGE_DANGER_LEAVES,
+  HEDGE_LEAVES,
 } from "../game/constants";
 import type { Cell, Colour, PlacedCell } from "../game/types";
 import { key } from "../game/types";
@@ -825,34 +828,37 @@ export class Scene {
       ctx.translate(-cx, -cy);
     }
 
-    // wooden frame
-    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, s * 0.14);
-    ctx.fillStyle = danger ? "#7a2230" : FRAME_HEX;
+    // clipped hedge body
+    const r = s * 0.16;
+    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, r);
+    ctx.fillStyle = danger ? HEDGE_DANGER : HEDGE_BASE;
     ctx.fill();
-    // wood grain
+    // bushy leaf dapples (deterministic per cell) so the frame reads as a hedge
     ctx.save();
     ctx.clip();
-    ctx.strokeStyle = "rgba(0,0,0,0.18)";
-    ctx.lineWidth = Math.max(1, s * 0.02);
-    const grain = makeRng(seed);
-    for (let i = 0; i < 3; i++) {
-      const gy = py + gap + grain() * (s - gap * 2);
+    const leaves = danger ? HEDGE_DANGER_LEAVES : HEDGE_LEAVES;
+    const rng = makeRng(seed);
+    const n = Math.max(7, Math.round(s * 0.34));
+    for (let i = 0; i < n; i++) {
+      const lx = px + gap + rng() * (s - gap * 2);
+      const ly = py + gap + rng() * (s - gap * 2);
+      const lr = s * (0.08 + rng() * 0.08);
+      ctx.fillStyle = leaves[(rng() * leaves.length) | 0];
       ctx.beginPath();
-      ctx.moveTo(px + gap, gy);
-      ctx.bezierCurveTo(px + s * 0.35, gy - s * 0.03, px + s * 0.65, gy + s * 0.03, px + s - gap, gy);
-      ctx.stroke();
+      ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
-    // crack outline
-    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, s * 0.14);
+    // crisp dark edge keeps neighbouring hedges legible as separate tiles
+    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, r);
     ctx.strokeStyle = FRAME_CRACK_HEX;
-    ctx.lineWidth = Math.max(1, s * 0.035);
+    ctx.lineWidth = Math.max(1, s * 0.05);
     ctx.stroke();
 
-    // foliage: a bold spiky colour splat (matches the painted physical tiles)
+    // the segment's colour as a bold splodge nested inside the hedge
     const fill = danger ? "#ffffff" : COLOUR_HEX[colour];
     const dark = danger ? "#cfcfcf" : COLOUR_HEX_DARK[colour];
-    splat(ctx, cx, cy, s * 0.4, seed, fill, dark);
+    splat(ctx, cx, cy, s * 0.3, seed, fill, dark);
 
     ctx.restore();
   }

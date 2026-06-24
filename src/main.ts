@@ -61,6 +61,7 @@ function renderStart(): void {
   const resumable = saved && !saved.gameOver ? saved : null;
   app.innerHTML = `
     ${ambientField()}
+    <div class="hedgerow" aria-hidden="true"></div>
     <div class="start">
       <div class="logo">Hedge<span>ways</span></div>
       <div class="hedge-row" aria-hidden="true">${PLAYER_KITS.map((k, i) => `<span style="--c:${k.colour};--i:${i}" data-animal="${k.animal}"></span>`).join("")}</div>

@@ -38,8 +38,14 @@ export const COLOUR_NAME: Record<Colour, string> = {
   P: "Pink",
 };
 
-/** Dark forest-green wooden tile frame + black cracks. */
+/** Dark forest-green hedge tile frame + deep shadow line. */
 export const FRAME_HEX = "#1f3d2b";
 export const FRAME_CRACK_HEX = "#0c1a12";
 export const ACRE_HEX = "#dff0c8"; // enclosed field fill
 export const BOARD_BG = "#eef3e6";
+
+/** Leafy hedge tones for the board tile: a clipped bush framing the colour splodge. */
+export const HEDGE_BASE = "#234b2f";
+export const HEDGE_LEAVES = ["#2c5e38", "#3c7a45", "#52a157", "#21482d"];
+export const HEDGE_DANGER = "#5e2a2a";
+export const HEDGE_DANGER_LEAVES = ["#7a3a32", "#9a4a3a", "#b65a44", "#5e2a2a"];
