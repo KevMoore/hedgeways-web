@@ -66,6 +66,9 @@ export class Scene {
   tapHandler: ((x: number, y: number) => void) | null = null;
   hoverHandler: ((x: number, y: number) => void) | null = null;
   leaveHandler: (() => void) | null = null;
+  /** Optional first-look at single-finger pointerdown — returns true to claim
+   *  the gesture (suppresses pan / pinch / tap dispatch for it). */
+  boardClaimHandler: ((cellX: number, cellY: number, e: PointerEvent) => boolean) | null = null;
   private hoverCell = "";
   private rafId = 0;
   private alive = true;
@@ -128,6 +131,7 @@ export class Scene {
     window.removeEventListener("resize", this.onResize);
     this.tapHandler = null;
     this.hoverHandler = null;
+    this.boardClaimHandler = null;
     this.leaveHandler = null;
   }
 
@@ -460,6 +464,14 @@ export class Scene {
     c.style.touchAction = "none";
 
     c.addEventListener("pointerdown", (e) => {
+      // First-finger only: let an external listener claim the gesture (e.g.
+      // game-ui picking up a pending tile to drag it around the board). If
+      // claimed, we don't pan, don't set capture — game-ui owns the gesture.
+      if (pointers.size === 0 && this.boardClaimHandler) {
+        const rect = c.getBoundingClientRect();
+        const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
+        if (this.boardClaimHandler(cx, cy, e)) return;
+      }
       c.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       down = true;
