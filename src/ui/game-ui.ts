@@ -52,7 +52,7 @@ export class GameUI {
   private alive = true;
   /** low-bag tiers already announced, so each callout fires at most once */
   private bagWarned = new Set<number>();
-  /** tappable cell -> the placement that would result (covers any of the hedge's cells) */
+  /** anchor cell -> the placement that would result (finger-position = anchor) */
   private placementByCell = new Map<string, PlacedTile>();
 
   private onQuit: (() => void) | null;
@@ -302,15 +302,14 @@ export class GameUI {
 
   private onHover(x: number, y: number): void {
     if (this.busy || this.game.currentPlayer.isBot || this.selectedId == null) return;
-    const candidate = this.placementByCell.get(key(x, y));
-    if (candidate) {
-      this.scene.setGhost(candidate.cells, true);
-      return;
-    }
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
     const [dir, flip] = ALL_ORI[this.oriIndex];
-    this.scene.setGhost(orient(tile, x, y, dir, flip), false);
+    // Ghost always anchors at the finger's cell. Green when that exact anchor
+    // is a legal placement; red otherwise. No auto-snap to a different cell.
+    const cells = orient(tile, x, y, dir, flip);
+    const valid = this.placementByCell.has(key(x, y));
+    this.scene.setGhost(cells, valid);
   }
 
   private flashInvalid(cells: PlacedTile["cells"]): void {
@@ -444,13 +443,9 @@ export class GameUI {
     if (this.selectedId == null) return;
     const tile = this.handTile(this.selectedId)!;
     const cands = this.anchorsFor(tile, ALL_ORI[this.oriIndex]);
-    for (const [anchorKey, cand] of cands) {
-      this.placementByCell.set(anchorKey, cand);
-      for (const c of cand.cells) {
-        const ck = key(c.x, c.y);
-        if (!this.placementByCell.has(ck)) this.placementByCell.set(ck, cand);
-      }
-    }
+    // Anchor-only: finger position IS the anchor. No magnetic snap from any
+    // covered cell to a candidate elsewhere — the player chooses the exact spot.
+    for (const [anchorKey, cand] of cands) this.placementByCell.set(anchorKey, cand);
   }
 
   /** Legal anchor cells (segment-0 position) for placing `tile` in this orientation now. */
