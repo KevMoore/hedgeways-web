@@ -8,10 +8,24 @@ import {
 } from "../game/constants";
 import type { Cell, Colour, PlacedCell } from "../game/types";
 import { key } from "../game/types";
+import { DIRS } from "../game/board";
+import { Sprites } from "./sprites";
 
 interface Ghost {
   cells: PlacedCell[];
   valid: boolean;
+}
+
+interface Critter {
+  animal: string;
+  x: number;
+  y: number;
+  tx: number;
+  ty: number;
+  state: "walk" | "graze" | "idle";
+  until: number;
+  facing: number; // 1 right, -1 left
+  phase: number;
 }
 
 const MIN_SCALE = 18;
@@ -51,6 +65,10 @@ export class Scene {
   private alive = true;
   private onResize = () => this.resize();
   private t = 0; // current frame time, for idle animations
+  private lastT = 0;
+  private sprites = new Sprites();
+  private critters = new Map<string, Critter>(); // home-cell key -> roaming animal
+  private critterComp = new Map<string, string[]>(); // enclosed cell -> its field's cells
   private reduceMotion =
     typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -115,6 +133,8 @@ export class Scene {
     this.acres.clear();
     this.acrePops = [];
     this.bursts = [];
+    this.critters.clear();
+    this.critterComp.clear();
     this.userMoved = false;
     this.scale = this.tScale = 56;
     this.camX = this.tCamX = 0.5;
@@ -135,9 +155,141 @@ export class Scene {
     this.cells = new Map(cells);
     this.enclosed = new Set(enclosed);
     if (acres) this.acres = new Map(acres);
+    this.rebuildCritters();
     if (!this.userMoved) this.fitBoard();
     else this.ensureVisible();
     this.needsDraw = true;
+  }
+
+  /** Keep ~one free-range animal per enclosed cell, grouped by field for roaming. */
+  private rebuildCritters(): void {
+    // connected components of the enclosed region (each = one field)
+    this.critterComp = new Map();
+    const seen = new Set<string>();
+    for (const start of this.enclosed) {
+      if (seen.has(start)) continue;
+      const group: string[] = [];
+      const stack = [start];
+      seen.add(start);
+      while (stack.length) {
+        const c = stack.pop()!;
+        group.push(c);
+        const [x, y] = c.split(",").map(Number);
+        for (const [dx, dy] of DIRS) {
+          const nk = key(x + dx, y + dy);
+          if (this.enclosed.has(nk) && !seen.has(nk)) {
+            seen.add(nk);
+            stack.push(nk);
+          }
+        }
+      }
+      for (const c of group) this.critterComp.set(c, group);
+    }
+    // drop critters whose home is no longer enclosed
+    for (const home of [...this.critters.keys()]) if (!this.enclosed.has(home)) this.critters.delete(home);
+    // spawn one per newly-claimed cell
+    for (const k of this.enclosed) {
+      const owner = this.acres.get(k);
+      if (!owner || this.critters.has(k)) continue;
+      const [x, y] = k.split(",").map(Number);
+      this.critters.set(k, {
+        animal: owner.animal,
+        x: x + 0.5,
+        y: y + 0.5,
+        tx: x + 0.5,
+        ty: y + 0.5,
+        state: "idle",
+        until: this.t + Math.random() * 1500,
+        facing: Math.random() < 0.5 ? -1 : 1,
+        phase: Math.random(),
+      });
+    }
+  }
+
+  private updateCritters(dt: number): void {
+    const list = [...this.critters.values()];
+    for (const c of list) {
+      if (c.state === "walk") {
+        const dx = c.tx - c.x;
+        const dy = c.ty - c.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 0.06) {
+          c.state = Math.random() < 0.6 ? "graze" : "idle";
+          c.until = this.t + 900 + Math.random() * 2400;
+        } else {
+          const sp = Math.min(d, 0.0013 * dt);
+          const nx = c.x + (dx / d) * sp;
+          const ny = c.y + (dy / d) * sp;
+          if (this.enclosed.has(key(Math.floor(nx), Math.floor(ny)))) {
+            c.x = nx;
+            c.y = ny;
+            if (Math.abs(dx) > 0.02) c.facing = dx < 0 ? -1 : 1;
+          } else {
+            c.state = "idle"; // hit a hedge — pause then retarget (can't escape)
+            c.until = this.t + 300;
+          }
+        }
+      } else if (this.t >= c.until) {
+        const cells = this.critterComp.get(key(Math.floor(c.x), Math.floor(c.y)));
+        if (cells && cells.length) {
+          const [tx, ty] = cells[Math.floor(Math.random() * cells.length)].split(",").map(Number);
+          c.tx = tx + 0.25 + Math.random() * 0.5;
+          c.ty = ty + 0.25 + Math.random() * 0.5;
+          c.state = "walk";
+        } else {
+          c.until = this.t + 1000;
+        }
+      }
+    }
+
+    // basic collision: push overlapping animals apart (but never out of the field)
+    const min = 0.62;
+    const min2 = min * min;
+    const inField = (x: number, y: number) => this.enclosed.has(key(Math.floor(x), Math.floor(y)));
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 >= min2) continue;
+        if (d2 < 1e-6) {
+          dx = 0.01;
+          dy = 0;
+          d2 = 1e-4;
+        }
+        const d = Math.sqrt(d2);
+        const push = (min - d) / 2;
+        const ux = dx / d;
+        const uy = dy / d;
+        if (inField(a.x - ux * push, a.y - uy * push)) {
+          a.x -= ux * push;
+          a.y -= uy * push;
+        }
+        if (inField(b.x + ux * push, b.y + uy * push)) {
+          b.x += ux * push;
+          b.y += uy * push;
+        }
+      }
+    }
+  }
+
+  private drawCritters(): void {
+    const ctx = this.ctx;
+    const size = this.scale * 0.8;
+    const ordered = [...this.critters.values()].sort((a, b) => a.y - b.y); // back-to-front
+    for (const c of ordered) {
+      const [px, py] = this.worldToScreen(c.x, c.y);
+      const frame = this.reduceMotion
+        ? this.sprites.frame(c.animal, "idle", 0, c.phase)
+        : this.sprites.frame(c.animal, c.state, this.t, c.phase);
+      ctx.save();
+      ctx.translate(px, py);
+      if (c.facing < 0) ctx.scale(-1, 1); // sheet faces right
+      this.sprites.drawFrame(ctx, frame, 0, 0, size);
+      ctx.restore();
+    }
   }
 
   /** Re-fit only if part of the board has drifted outside the viewport. */
@@ -419,6 +571,13 @@ export class Scene {
       this.drawHedge(x, y, cell.colour, 1, false, pop);
     }
 
+    // free-range livestock roaming inside the fields (only if the sheet loaded)
+    if (this.critters.size) {
+      const dt = this.reduceMotion ? 0 : Math.min(60, now - this.lastT);
+      if (dt > 0) this.updateCritters(dt);
+      this.drawCritters();
+    }
+
     // highlights — faded ghost hedges showing where the selected tile could sit
     for (const [k, colour] of this.highlights) {
       const [x, y] = k.split(",").map(Number);
@@ -480,6 +639,7 @@ export class Scene {
 
     ctx.restore();
     this.needsDraw = false;
+    this.lastT = this.t;
   }
 
   private drawGrid(vw: number, vh: number): void {
@@ -521,14 +681,15 @@ export class Scene {
       ctx.lineTo(px + s - 2, py + (s * i) / 4);
     }
     ctx.stroke();
-    if (owner && s > 22) {
-      // idle-animate the livestock: a gentle bob + occasional hop, out of sync per cell
+    // Animals: when the sprite sheet is loaded they roam free-range (drawn
+    // separately as critters). Without it, fall back to a bobbing emoji per cell.
+    if (owner && s > 22 && !this.sprites.ready(owner.animal)) {
       const phase = (hash(x, y) & 1023) / 1023;
       let bob = 0;
       let squash = 1;
       if (!this.reduceMotion) {
         const cyc = this.t / 900 + phase * 6.28;
-        bob = -Math.abs(Math.sin(cyc)) * s * 0.12; // little hops
+        bob = -Math.abs(Math.sin(cyc)) * s * 0.12;
         squash = 1 + Math.sin(cyc * 2) * 0.04;
       }
       ctx.font = `${Math.round(s * 0.58)}px serif`;
