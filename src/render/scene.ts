@@ -708,6 +708,9 @@ export class Scene {
       ctx.lineTo(px + s - 2, py + (s * i) / 4);
     }
     ctx.stroke();
+    // owner's livestock feed scattered on their land: grass (sheep/cow),
+    // grain (chicken), mud wallow (pig) — a deterministic, per-cell touch.
+    if (owner && s > 14) this.drawAcreFood(px, py, s, owner.animal, hash(x, y));
     // Animals: when the sprite sheet is loaded they roam free-range (drawn
     // separately as critters). Without it, fall back to a bobbing emoji per cell.
     if (owner && s > 22 && !this.sprites.ready(owner.animal)) {
@@ -729,6 +732,74 @@ export class Scene {
       ctx.restore();
     }
   }
+  /** Scatter the owner's feed across an enclosed acre (deterministic per cell). */
+  private drawAcreFood(px: number, py: number, s: number, animal: string, seed: number): void {
+    const ctx = this.ctx;
+    const rng = makeRng(seed);
+    const inset = s * 0.12;
+    const x0 = px + inset;
+    const y0 = py + inset;
+    const w = s - inset * 2;
+    const h = s - inset * 2;
+    ctx.save();
+
+    if (animal === "🐷") {
+      // mud wallow: a couple of earthy puddles with a few rooted flecks
+      const puddles = 2 + (rng() < 0.5 ? 1 : 0);
+      for (let i = 0; i < puddles; i++) {
+        const cx = x0 + rng() * w;
+        const cy = y0 + rng() * h;
+        const r = s * (0.11 + rng() * 0.1);
+        ctx.fillStyle = `rgba(${88 + Math.round(rng() * 22)},${60 + Math.round(rng() * 16)},38,0.5)`;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, r, r * 0.66, rng() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "rgba(58,40,24,0.55)";
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.arc(x0 + rng() * w, y0 + rng() * h, Math.max(0.8, s * 0.02), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      return;
+    }
+
+    if (animal === "🐓") {
+      // grain: scattered golden seeds
+      const seeds = Math.max(4, Math.round(s / 9));
+      for (let i = 0; i < seeds; i++) {
+        const cx = x0 + rng() * w;
+        const cy = y0 + rng() * h;
+        ctx.fillStyle = rng() < 0.5 ? "rgba(216,162,48,0.85)" : "rgba(186,128,32,0.85)";
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, Math.max(0.8, s * 0.03), Math.max(0.5, s * 0.016), rng() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      return;
+    }
+
+    // grass (sheep, cow, default): little green tufts
+    const tufts = Math.max(3, Math.round(s / 11));
+    const lw = Math.max(1, s * 0.022);
+    ctx.lineWidth = lw;
+    ctx.lineCap = "round";
+    for (let i = 0; i < tufts; i++) {
+      const bx = x0 + rng() * w;
+      const by = y0 + h * (0.35 + rng() * 0.6);
+      const len = s * (0.12 + rng() * 0.08);
+      ctx.strokeStyle = rng() < 0.5 ? "rgba(95,160,60,0.85)" : "rgba(70,130,46,0.85)";
+      for (let b = -1; b <= 1; b++) {
+        ctx.beginPath();
+        ctx.moveTo(bx + b * lw, by);
+        ctx.lineTo(bx + b * lw * 1.5 + b * len * 0.3, by - len);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   private drawAcreFlash(x: number, y: number, alpha: number): void {
     const ctx = this.ctx;
     const [px, py] = this.worldToScreen(x, y);
