@@ -19,6 +19,14 @@ body,
   height: 100%;
   width: 100%;
 }
+html,
+body {
+  /* Lock the document — no page scroll, no pull-to-refresh, no rubber-band */
+  overflow: hidden;
+  overscroll-behavior: none;
+  position: fixed;
+  inset: 0;
+}
 body {
   background: linear-gradient(180deg, #f4f8ee 0%, #eef3e6 48%, #e2eed0 100%);
   color: var(--ink);
@@ -349,6 +357,11 @@ body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  /* Block browser gestures inside the game (scroll/zoom/pull-to-refresh).
+     The hand chips and canvas already have their own touch-action:none, but
+     this also covers the gaps between elements so a stray finger never
+     triggers a scroll. Form controls inside .game don't exist. */
+  touch-action: none;
 }
 .hud {
   display: flex;

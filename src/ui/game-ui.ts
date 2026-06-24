@@ -46,9 +46,6 @@ export class GameUI {
   private botTimer: number | null = null;
   /** active farmer-portrait raf widgets, disposed before re-render */
   private farmerWidgets: { dispose: () => void }[] = [];
-  /** in-flight drag of a pending placement off the board */
-  private boardDragPointer = -1;
-  private boardDragOriginal: { placement: PlacedTile; oriIdx: number } | null = null;
   private alive = true;
   /** low-bag tiers already announced, so each callout fires at most once */
   private bagWarned = new Set<number>();
@@ -74,7 +71,6 @@ export class GameUI {
     this.scene.tapHandler = (x, y) => this.onTapCell(x, y);
     this.scene.hoverHandler = (x, y) => this.onHover(x, y);
     this.scene.leaveHandler = () => this.scene.setGhost(null, false);
-    this.scene.boardClaimHandler = (x, y, e) => this.tryStartBoardDrag(x, y, e);
 
     root.querySelector("#btn-rotate")!.addEventListener("click", () => this.rotate());
     root.querySelector("#btn-undo")!.addEventListener("click", () => this.undo());
@@ -222,83 +218,6 @@ export class GameUI {
     const [dir, flip] = ALL_ORI[this.oriIndex];
     this.flashInvalid(orient(tile, x, y, dir, flip));
   }
-
-  /** Single-finger pointerdown on the board: if it lands on a pending tile,
-   *  pick that pending up (removing it from `pending`, becoming selectedId)
-   *  so the player can drag it to a new position. Returns true to claim the
-   *  gesture so the scene doesn't try to pan.
-   */
-  private tryStartBoardDrag(x: number, y: number, e: PointerEvent): boolean {
-    if (this.busy || this.game.currentPlayer.isBot) return false;
-    if (this.boardDragPointer !== -1) return false;
-    const idx = this.pending.findIndex((p) => p.cells.some((c) => c.x === x && c.y === y));
-    if (idx < 0) return false;
-    // Pick up: remove from pending, set as selected, refresh placement candidates
-    const placement = this.pending.splice(idx, 1)[0];
-    const oriIdx = this.pendingOri.splice(idx, 1)[0];
-    this.usedIds.delete(placement.tileId);
-    this.selectedId = placement.tileId;
-    this.oriIndex = oriIdx;
-    this.refreshHighlights();
-    this.syncScene();
-    this.renderHand(false);
-    this.updateButtons();
-    this.boardDragOriginal = { placement, oriIdx };
-    this.boardDragPointer = e.pointerId;
-    // ghost-preview at current finger position
-    this.updateGhostFromClient(e.clientX, e.clientY);
-    window.addEventListener("pointermove", this.onBoardDragMove);
-    window.addEventListener("pointerup", this.onBoardDragEnd);
-    window.addEventListener("pointercancel", this.onBoardDragEnd);
-    sfx.pickup();
-    return true;
-  }
-
-  private updateGhostFromClient(clientX: number, clientY: number): void {
-    if (this.scene.pointOverBoard(clientX, clientY)) {
-      const [cx, cy] = this.scene.cellAtClient(clientX, clientY);
-      this.onHover(cx, cy);
-    } else {
-      this.scene.setGhost(null, false);
-    }
-  }
-
-  private onBoardDragMove = (e: PointerEvent): void => {
-    if (e.pointerId !== this.boardDragPointer) return;
-    this.updateGhostFromClient(e.clientX, e.clientY);
-  };
-
-  private onBoardDragEnd = (e: PointerEvent): void => {
-    if (e.pointerId !== this.boardDragPointer) return;
-    window.removeEventListener("pointermove", this.onBoardDragMove);
-    window.removeEventListener("pointerup", this.onBoardDragEnd);
-    window.removeEventListener("pointercancel", this.onBoardDragEnd);
-    const orig = this.boardDragOriginal!;
-    this.boardDragPointer = -1;
-    this.boardDragOriginal = null;
-    if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
-      const [cx, cy] = this.scene.cellAtClient(e.clientX, e.clientY);
-      const candidate = this.placementByCell.get(key(cx, cy));
-      if (candidate) {
-        // valid drop — onTapCell will place it (using the current orientation
-        // which we preserved from the original pending)
-        this.onTapCell(cx, cy);
-        return;
-      }
-    }
-    // Invalid drop: bray donkey, restore the placement to where it was so the
-    // player can grab it again and try a fresh position.
-    sfx.invalid();
-    this.pending.push(orig.placement);
-    this.pendingOri.push(orig.oriIdx);
-    this.usedIds.add(orig.placement.tileId);
-    this.selectedId = null;
-    this.scene.setGhost(null, false);
-    this.refreshHighlights();
-    this.syncScene();
-    this.renderHand(false);
-    this.updateButtons();
-  };
 
   private onHover(x: number, y: number): void {
     if (this.busy || this.game.currentPlayer.isBot || this.selectedId == null) return;
@@ -724,13 +643,6 @@ export class GameUI {
     if (this.invalidTimer !== null) window.clearTimeout(this.invalidTimer);
     for (const w of this.farmerWidgets) w.dispose();
     this.farmerWidgets = [];
-    if (this.boardDragPointer !== -1) {
-      window.removeEventListener("pointermove", this.onBoardDragMove);
-      window.removeEventListener("pointerup", this.onBoardDragEnd);
-      window.removeEventListener("pointercancel", this.onBoardDragEnd);
-      this.boardDragPointer = -1;
-      this.boardDragOriginal = null;
-    }
     this.scene.destroy();
   }
 
