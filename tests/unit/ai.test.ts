@@ -80,6 +80,33 @@ describe("AI", () => {
     expect(conserved(game)).toBe(true);
   });
 
+  it("expert stays within its time budget on a busy mid-game board (no freeze)", () => {
+    // build a non-trivial board by playing several turns, then time an expert move
+    const game = new Game({
+      seed: 21,
+      players: [
+        { name: "E", isBot: true, difficulty: "expert" },
+        { name: "H", isBot: true, difficulty: "hard" },
+      ],
+    });
+    const rng = makeRng(21);
+    for (let i = 0; i < 10; i++) {
+      const m = chooseAiMove(game, { rng, maxMs: 120 });
+      if (m) game.commit(m);
+      else game.pass();
+      if (game.gameOver) break;
+    }
+    if (!game.gameOver) {
+      // force an expert decision and assert it returns promptly
+      game.players[game.current].difficulty = "expert";
+      const t0 = performance.now();
+      const m = chooseAiMove(game, { rng, maxMs: 150 });
+      const dt = performance.now() - t0;
+      expect(m === null || m.tiles.length >= 1).toBe(true);
+      expect(dt).toBeLessThan(1500); // generous CI margin; real budget is ~150ms
+    }
+  });
+
   it("expert produces a legal move within a small budget", () => {
     const game = new Game({
       seed: 3,

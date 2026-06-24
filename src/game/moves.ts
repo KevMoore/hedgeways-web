@@ -60,12 +60,18 @@ export interface GenOptions {
   maxLay?: number;
   /** Cap on number of moves returned (best-effort breadth limit for the AI). */
   limit?: number;
+  /** effort cap: stop the search after this many candidate placements are tried.
+   * Prevents pathological full enumeration on large, colour-constrained boards
+   * where fewer than `limit` legal moves exist. */
+  maxNodes?: number;
 }
 
 /** Enumerate all legal turns (lay 1..maxLay colour-linked tiles). */
 export function generateMoves(board: Board, hand: Tile[], opts: GenOptions = {}): Move[] {
   const maxLay = Math.min(opts.maxLay ?? 3, hand.length);
   const limit = opts.limit ?? Infinity;
+  const maxNodes = opts.maxNodes ?? 12000;
+  let nodes = 0;
   const results: Move[] = [];
   const seen = new Set<string>();
   if (maxLay === 0) return results;
@@ -76,56 +82,50 @@ export function generateMoves(board: Board, hand: Tile[], opts: GenOptions = {})
   const record = (placed: PlacedTile[]) => {
     const mk = moveKey(placed);
     if (seen.has(mk)) return;
-    if (!validateMove(board, placed).ok) return;
     seen.add(mk);
     results.push({ tiles: placed.map((t) => ({ tileId: t.tileId, cells: t.cells.slice() })) });
   };
 
-  const dfs = (placed: PlacedTile[], used: Set<number>, groupCells: Set<string>) => {
-    if (results.length >= limit) return;
-    if (placed.length >= 1) record(placed);
-    if (placed.length >= maxLay || results.length >= limit) return;
+  const done = () => results.length >= limit || nodes >= maxNodes;
+
+  // `placed` is always a VALID partial move; we only ever extend with tiles that
+  // keep it valid, so invalid colour branches are pruned instead of explored.
+  const extend = (placed: PlacedTile[], used: Set<number>, groupCells: Set<string>) => {
+    if (done() || placed.length >= maxLay) return;
 
     const blocked = new Set(blockedBase);
     for (const k of groupCells) blocked.add(k);
 
-    // where can the next tile attach?
     const anchors =
       board.size === 0 && placed.length === 0
         ? new Set<string>(["0,0"])
         : frontier(groupCells.size ? groupCells : occupied, blocked);
-
     const anchorList = [...anchors];
+
     for (let idx = 0; idx < hand.length; idx++) {
       if (used.has(idx)) continue;
-      if (results.length >= limit) return;
+      if (done()) return;
       const tile = hand[idx];
-      if (board.size === 0 && placed.length === 0) {
-        for (const p of originPlacements(tile)) {
-          if (results.length >= limit) return;
-          const nextGroup = new Set(groupCells);
-          for (const c of p.cells) nextGroup.add(key(c.x, c.y));
-          used.add(idx);
-          dfs([...placed, p], used, nextGroup);
-          used.delete(idx);
-        }
-        continue;
-      }
-      for (const a of anchorList) {
-        if (results.length >= limit) return;
-        for (const p of placementsCovering(tile, a, blocked)) {
-          if (results.length >= limit) return;
-          const nextGroup = new Set(groupCells);
-          for (const c of p.cells) nextGroup.add(key(c.x, c.y));
-          used.add(idx);
-          dfs([...placed, p], used, nextGroup);
-          used.delete(idx);
-        }
+      const cands =
+        board.size === 0 && placed.length === 0
+          ? originPlacements(tile)
+          : anchorList.flatMap((a) => placementsCovering(tile, a, blocked));
+      for (const p of cands) {
+        if (done()) return;
+        nodes++;
+        const next = [...placed, p];
+        if (!validateMove(board, next).ok) continue; // prune: never recurse on invalid
+        record(next);
+        const nextGroup = new Set(groupCells);
+        for (const c of p.cells) nextGroup.add(key(c.x, c.y));
+        used.add(idx);
+        extend(next, used, nextGroup);
+        used.delete(idx);
       }
     }
   };
 
-  dfs([], new Set(), new Set());
+  extend([], new Set(), new Set());
   return results;
 }
 

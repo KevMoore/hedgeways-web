@@ -142,9 +142,9 @@ function determinize(game: Game, me: number, rng: Rng): SimState {
   };
 }
 
-/** Cheap rollout policy: random-ish legal move. */
+/** Cheap rollout policy: random-ish legal move (single-tile only, tight effort cap). */
 function pickRandom(board: Board, hand: Tile[], rng: Rng): Move | null {
-  const moves = generateMoves(board, hand, { limit: 12 });
+  const moves = generateMoves(board, hand, { limit: 10, maxLay: 1, maxNodes: 800 });
   if (moves.length === 0) return null;
   // 50% chance: pick the move with highest immediate gain (cheap)
   if (rng() < 0.5) {
@@ -197,17 +197,33 @@ function rollout(s: SimState, me: number, rng: Rng, maxPlies: number): number {
   return s.scores[me] - oppBest; // margin
 }
 
-function expertMove(game: Game, me: number, rng: Rng, iterations: number): Move | null {
-  const root = generateMoves(game.board, game.players[me].hand, { limit: BREADTH.expert });
+const clock = (): number =>
+  typeof performance !== "undefined" ? performance.now() : Date.now();
+
+const ROOT_K = 12; // MCTS concentrates on the heuristic's best dozen candidates
+
+function expertMove(game: Game, me: number, rng: Rng, iterations: number, maxMs: number): Move | null {
+  let root = generateMoves(game.board, game.players[me].hand, { limit: BREADTH.expert });
   if (root.length === 0) return null;
   if (root.length === 1) return root[0];
+
+  // Pre-rank by the strong heuristic and keep the top-K so each surviving arm
+  // gets enough rollouts to matter (otherwise the search is near-random).
+  let scored = root.map((m) => ({ m, h: heuristic(game.board, m, "hard").v }));
+  scored.sort((a, b) => b.h - a.h);
+  if (scored.length > ROOT_K) scored = scored.slice(0, ROOT_K);
+  root = scored.map((s) => s.m);
+  const prior = scored.map((s) => s.h); // heuristic value, used as a strong prior
 
   const n = root.length;
   const visits = new Array(n).fill(0);
   const total = new Array(n).fill(0);
   const C = 1.3;
+  const start = clock();
 
   for (let it = 0; it < iterations; it++) {
+    // wall-clock budget: never block the UI for long regardless of board size
+    if (it > 0 && clock() - start > maxMs) break;
     let arm = 0;
     let bestU = -Infinity;
     for (let i = 0; i < n; i++) {
@@ -233,16 +249,21 @@ function expertMove(game: Game, me: number, rng: Rng, iterations: number): Move 
     } else {
       s.current = (me + 1) % s.hands.length;
     }
-    const margin = rollout(s, me, rng, 24);
+    const margin = rollout(s, me, rng, 18);
     visits[arm]++;
     total[arm] += margin;
   }
 
+  // Final score blends the heuristic prior (reliable) with the MCTS rollout
+  // margin (refines among the heuristic's best). Keeps expert >= hard while
+  // letting search break ties and spot deeper enclosure timing.
   let best = 0;
-  let bestV = -Infinity;
+  let bestScore = -Infinity;
   for (let i = 0; i < n; i++) {
-    if (visits[i] > bestV) {
-      bestV = visits[i];
+    const mean = visits[i] > 0 ? total[i] / visits[i] : 0;
+    const score = prior[i] + 0.15 * mean;
+    if (score > bestScore) {
+      bestScore = score;
       best = i;
     }
   }
@@ -252,6 +273,8 @@ function expertMove(game: Game, me: number, rng: Rng, iterations: number): Move 
 export interface AiOptions {
   rng?: Rng;
   iterations?: number;
+  /** wall-clock budget for the expert search, ms (keeps the UI responsive) */
+  maxMs?: number;
 }
 
 /** Choose a move for the current player, or null to pass. */
@@ -262,7 +285,7 @@ export function chooseAiMove(game: Game, opts: AiOptions = {}): Move | null {
     // first move on an empty board: the search tree is huge and rollouts are
     // mostly noise — fall back to the strong heuristic.
     if (game.board.size === 0) return pickGreedy(game.board, player.hand, "hard", rng);
-    return expertMove(game, game.current, rng, opts.iterations ?? 80);
+    return expertMove(game, game.current, rng, opts.iterations ?? 120, opts.maxMs ?? 300);
   }
   return pickGreedy(game.board, player.hand, player.difficulty, rng);
 }
