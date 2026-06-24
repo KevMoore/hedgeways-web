@@ -35,6 +35,9 @@ export class GameUI {
   private root: HTMLElement;
 
   private pending: PlacedTile[] = [];
+  /** orientation index used for each entry in `pending` (parallel array) —
+   * lets the Rotate button cycle a tile in place after it's been dropped. */
+  private pendingOri: number[] = [];
   private usedIds = new Set<number>();
   private selectedId: number | null = null;
   private oriIndex = 0;
@@ -192,6 +195,7 @@ export class GameUI {
     const candidate = this.placementByCell.get(key(x, y));
     if (candidate) {
       this.pending.push(candidate);
+      this.pendingOri.push(this.oriIndex);
       this.usedIds.add(candidate.tileId);
       this.selectedId = null;
       sfx.place();
@@ -263,17 +267,63 @@ export class GameUI {
   }
 
   private rotate(): void {
-    if (this.selectedId == null) return;
-    const tile = this.handTile(this.selectedId)!;
+    // 1) An in-hand tile is selected → rotate its preview orientation.
+    if (this.selectedId != null) {
+      const tile = this.handTile(this.selectedId)!;
+      const allowed = isPalindrome(tile) ? [0, 1] : [0, 1, 2, 3];
+      const pos = allowed.indexOf(this.oriIndex);
+      this.oriIndex = allowed[(pos + 1) % allowed.length];
+      sfx.rotate();
+      this.refreshHighlights();
+      return;
+    }
+    // 2) No selection but a tile is already pending → rotate the last placed
+    //    tile in place around its anchor, keeping every placement legal.
+    if (this.pending.length > 0) this.rotateLastPending();
+  }
+
+  /** Rotate the most recent pending placement around its anchor. Tries each
+   *  remaining orientation in cycle; the first one that yields a legal
+   *  combined move wins. If none work, no change + an "invalid" bray. */
+  private rotateLastPending(): void {
+    const lastIdx = this.pending.length - 1;
+    const last = this.pending[lastIdx];
+    const lastOri = this.pendingOri[lastIdx];
+    const tile = this.game.currentPlayer.hand.find((t) => t.id === last.tileId);
+    if (!tile) return;
+    const anchor = last.cells[0];
     const allowed = isPalindrome(tile) ? [0, 1] : [0, 1, 2, 3];
-    const pos = allowed.indexOf(this.oriIndex);
-    this.oriIndex = allowed[(pos + 1) % allowed.length];
-    sfx.rotate();
-    this.refreshHighlights();
+    const startPos = allowed.indexOf(lastOri);
+    for (let i = 1; i <= allowed.length; i++) {
+      const tryOri = allowed[(startPos + i) % allowed.length];
+      const [dir, flip] = ALL_ORI[tryOri];
+      const cells = orient(tile, anchor.x, anchor.y, dir, flip);
+      // Don't intersect other pending placements or already-placed cells
+      const otherPending = this.pending.filter((_, j) => j !== lastIdx);
+      const occupied = new Set<string>([
+        ...otherPending.flatMap((p) => p.cells.map((c) => key(c.x, c.y))),
+        ...this.game.board.cells.keys(),
+      ]);
+      if (cells.some((c) => occupied.has(key(c.x, c.y)))) continue;
+      if (cells.some((c) => this.game.board.enclosed.has(key(c.x, c.y)))) continue;
+      const candidate: PlacedTile = { tileId: tile.id, cells };
+      // Engine-level validation in the context of the full pending set
+      const allTiles = [...otherPending, candidate].map((p) => ({ tileId: p.tileId, cells: p.cells }));
+      if (validateMove(this.game.board, allTiles).ok) {
+        this.pending[lastIdx] = candidate;
+        this.pendingOri[lastIdx] = tryOri;
+        sfx.rotate();
+        this.syncScene();
+        this.updateButtons();
+        return;
+      }
+    }
+    sfx.invalid(); // no legal rotation at this anchor
   }
 
   private undo(): void {
     const last = this.pending.pop();
+    this.pendingOri.pop();
     if (!last) return;
     this.usedIds.delete(last.tileId);
     this.selectedId = null;
@@ -560,7 +610,7 @@ export class GameUI {
   private updateButtons(): void {
     const human = !this.game.currentPlayer.isBot && !this.game.gameOver;
     const hasMove = human && this.game.hasLegalMove();
-    btn(this.root, "#btn-rotate", human && this.selectedId != null);
+    btn(this.root, "#btn-rotate", human && (this.selectedId != null || this.pending.length > 0));
     btn(this.root, "#btn-undo", human && this.pending.length > 0);
     btn(this.root, "#btn-confirm", human && this.pending.length > 0);
     btn(this.root, "#btn-pass", human && !hasMove && this.pending.length === 0);
@@ -576,6 +626,7 @@ export class GameUI {
 
   private clearTurnState(): void {
     this.pending = [];
+    this.pendingOri = [];
     this.usedIds.clear();
     this.selectedId = null;
     this.oriIndex = 0;
