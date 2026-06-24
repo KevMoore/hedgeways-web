@@ -286,8 +286,9 @@ export class GameUI {
         return;
       }
     }
-    // Invalid / off-board drop: restore the original placement exactly where
-    // it was. No donkey — the player just changed their mind.
+    // Invalid drop: bray donkey, restore the placement to where it was so the
+    // player can grab it again and try a fresh position.
+    sfx.invalid();
     this.pending.push(orig.placement);
     this.pendingOri.push(orig.oriIdx);
     this.usedIds.add(orig.placement.tileId);
@@ -555,7 +556,7 @@ export class GameUI {
    * snaps back. Off-board release silently aborts.
    */
   private attachTileInput(d: HTMLElement, tileId: number): void {
-    const DRAG_SLOP = 8;
+    const DRAG_SLOP = 3; // finger only needs to move ~3px for the drag to engage
     let startX = 0;
     let startY = 0;
     let pressed = false;
