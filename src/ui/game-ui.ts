@@ -235,8 +235,16 @@ export class GameUI {
   private selectTile(id: number): void {
     if (this.usedIds.has(id)) return;
     if (this.pending.length >= MAX_LAY) return; // at most 3 hedges per turn
-    this.selectedId = this.selectedId === id ? null : id;
-    this.oriIndex = this.firstUsableOri(id);
+    const becomingSelected = this.selectedId !== id;
+    this.selectedId = becomingSelected ? id : null;
+    if (becomingSelected) {
+      // Keep the player's chosen orientation if it has legal placements for
+      // the newly picked tile — so rotating once is enough for the whole turn.
+      const tile = this.handTile(id)!;
+      if (this.anchorsFor(tile, ALL_ORI[this.oriIndex]).size === 0) {
+        this.oriIndex = this.firstUsableOri(id);
+      }
+    }
     sfx.pickup();
     this.renderHand(false);
     this.refreshHighlights();
@@ -423,6 +431,7 @@ export class GameUI {
     d.addEventListener("pointerdown", (e) => {
       if (this.usedIds.has(tileId)) return;
       if (this.pending.length >= MAX_LAY && this.selectedId !== tileId) return;
+      e.preventDefault(); // suppress browser drag/select fallback (mobile especially)
       pressed = true;
       dragging = false;
       pid = e.pointerId;
@@ -442,7 +451,12 @@ export class GameUI {
         // commit to the drag: select this tile so the ghost-preview path is live
         if (this.selectedId !== tileId) {
           this.selectedId = tileId;
-          this.oriIndex = this.firstUsableOri(tileId);
+          // preserve the current orientation if it still has legal placements
+          // for this tile (so a rotate before the drag isn't thrown away)
+          const tile = this.handTile(tileId)!;
+          if (this.anchorsFor(tile, ALL_ORI[this.oriIndex]).size === 0) {
+            this.oriIndex = this.firstUsableOri(tileId);
+          }
           sfx.pickup();
           this.refreshHighlights();
           this.updateButtons();

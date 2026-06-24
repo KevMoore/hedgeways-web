@@ -23,6 +23,12 @@ body {
   background: linear-gradient(180deg, #f4f8ee 0%, #eef3e6 48%, #e2eed0 100%);
   color: var(--ink);
   overscroll-behavior: none;
+  /* Mobile drag-and-drop friendly: don't let the browser hijack our touches
+     with text selection, the iOS callout menu, or default tap behaviours. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* a leafy hedgerow running along the foot of the start screen */
@@ -257,6 +263,9 @@ body {
   background: #fff;
   font: inherit;
   text-transform: capitalize;
+  /* re-allow native control selection (overrides body's user-select:none) */
+  -webkit-user-select: auto;
+  user-select: auto;
 }
 .start-btns {
   display: flex;
@@ -480,11 +489,18 @@ body {
   background: #4b9a55;
   border: 1.5px solid #2c5e38;
   border-radius: 9px;
-  cursor: pointer;
+  cursor: grab;
   box-shadow:
     inset 0 1px 0 rgba(140, 200, 130, 0.3),
     0 1px 2px rgba(20, 50, 24, 0.15);
   overflow: hidden;
+  /* Touch: the chip handles its own pointer events for drag-to-place — the
+     browser must not steal the gesture for selection/scroll/zoom. */
+  touch-action: none;
+  -webkit-user-drag: none;
+}
+.tile:active {
+  cursor: grabbing;
 }
 .tile span {
   height: 22px;
