@@ -4,7 +4,7 @@ import { COLOUR_HEX, COLOUR_HEX_DARK, MAX_LAY } from "../game/constants";
 import { Game, type GameConfig, type GameSnapshot } from "../game/game";
 import { generateMoves } from "../game/moves";
 import { validateMove } from "../game/placement";
-import type { Cell, Move, Orientation, PlacedTile, Tile } from "../game/types";
+import type { Cell, Colour, Move, Orientation, PlacedTile, Tile } from "../game/types";
 import { key } from "../game/types";
 import { sfx } from "../audio";
 import { Scene } from "../render/scene";
@@ -243,22 +243,24 @@ export class GameUI {
   private refreshHighlights(): void {
     this.placementByCell.clear();
     if (this.selectedId == null) {
-      this.scene.setHighlights([]);
+      this.scene.setHighlights(new Map());
       return;
     }
     const tile = this.handTile(this.selectedId)!;
     const cands = this.anchorsFor(tile, ALL_ORI[this.oriIndex]);
-    const cover = new Set<string>();
+    // cell -> colour of the segment that would occupy it (faded ghost preview)
+    const cover = new Map<string, Colour>();
     // map every covered cell -> a placement, so tapping anywhere on the hedge works.
     // prefer the placement whose anchor is the tapped cell for predictable behaviour.
     for (const [anchorKey, cand] of cands) {
       this.placementByCell.set(anchorKey, cand);
-      for (const c of cand.cells) cover.add(key(c.x, c.y));
+      for (const c of cand.cells) cover.set(key(c.x, c.y), c.colour);
     }
     for (const cand of cands.values()) {
       for (const c of cand.cells) {
         const ck = key(c.x, c.y);
         if (!this.placementByCell.has(ck)) this.placementByCell.set(ck, cand);
+        if (!cover.has(ck)) cover.set(ck, c.colour);
       }
     }
     this.scene.setHighlights(cover);
@@ -392,7 +394,7 @@ export class GameUI {
     this.selectedId = null;
     this.oriIndex = 0;
     this.placementByCell.clear();
-    this.scene.setHighlights([]);
+    this.scene.setHighlights(new Map());
     this.scene.setGhost(null, false);
   }
 

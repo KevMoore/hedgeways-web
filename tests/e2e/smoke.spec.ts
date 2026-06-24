@@ -33,7 +33,7 @@ test.describe("Hedgeways smoke", () => {
     const target = await page.evaluate(() => {
       const ui = (window as any).__hedge.ui;
       const sc = ui.scene;
-      const hl = [...sc.highlights];
+      const hl = [...sc.highlights.keys()];
       const [x, y] = hl[Math.floor(hl.length / 2)].split(",").map(Number);
       const canvas = document.querySelector("canvas.board") as HTMLCanvasElement;
       const r = canvas.getBoundingClientRect();

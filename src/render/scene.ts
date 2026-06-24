@@ -16,6 +16,7 @@ interface Ghost {
 
 const MIN_SCALE = 18;
 const MAX_SCALE = 110;
+const TAP_SLOP = 12; // px of finger drift still treated as a tap (not a pan)
 const POP_MS = 320; // tile placement pop-in
 const ACRE_POP_MS = 1300; // floating "+N acres" lifetime
 
@@ -25,7 +26,7 @@ export class Scene {
   private cells = new Map<string, Cell>();
   private enclosed = new Set<string>();
   private ghost: Ghost | null = null;
-  private highlights = new Set<string>();
+  private highlights = new Map<string, Colour>(); // cell -> colour of the hedge segment that could sit there
   private flash = new Map<string, number>(); // cell -> start time
   private placedAt = new Map<string, number>(); // cell -> placement time (pop-in anim)
   private acres = new Map<string, { colour: string; animal: string }>(); // enclosed cell -> owner style
@@ -149,8 +150,8 @@ export class Scene {
     this.needsDraw = true;
   }
 
-  setHighlights(cells: Iterable<string>): void {
-    this.highlights = new Set(cells);
+  setHighlights(cells: Map<string, Colour>): void {
+    this.highlights = new Map(cells);
     this.needsDraw = true;
   }
 
@@ -264,16 +265,21 @@ export class Scene {
         this.userMoved = true;
         return;
       }
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      // only treat as an intentional pan (and pin the camera) past a small threshold,
-      // so click jitter doesn't permanently disable auto-fit.
-      if (Math.abs(e.clientX - startX) > 5 || Math.abs(e.clientY - startY) > 5) {
+      // Don't pan until movement passes a finger-friendly threshold; below it the
+      // gesture stays a tap (fixes "tapped a valid square but nothing placed" when a
+      // finger drifts a few px) and the camera doesn't shift under the tap.
+      if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < TAP_SLOP) {
+        return;
+      }
+      if (!moved) {
         moved = true;
         this.userMoved = true;
+        lastX = e.clientX; // reset origin so the camera doesn't jump by the slop amount
+        lastY = e.clientY;
+        return;
       }
-      this.camX -= dx / this.scale;
-      this.camY -= dy / this.scale;
+      this.camX -= (e.clientX - lastX) / this.scale;
+      this.camY -= (e.clientY - lastY) / this.scale;
       lastX = e.clientX;
       lastY = e.clientY;
       this.needsDraw = true;
@@ -352,17 +358,10 @@ export class Scene {
       this.drawHedge(x, y, cell.colour, 1, false, pop);
     }
 
-    // highlights — cells where the selected hedge could legally sit
-    if (this.highlights.size) {
-      for (const k of this.highlights) {
-        const [x, y] = k.split(",").map(Number);
-        const [px, py] = this.worldToScreen(x, y);
-        ctx.fillStyle = "rgba(108,194,74,0.32)";
-        ctx.fillRect(px + 1, py + 1, this.scale - 2, this.scale - 2);
-        ctx.strokeStyle = "rgba(40,110,40,0.7)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(px + 2, py + 2, this.scale - 4, this.scale - 4);
-      }
+    // highlights — faded ghost hedges showing where the selected tile could sit
+    for (const [k, colour] of this.highlights) {
+      const [x, y] = k.split(",").map(Number);
+      this.drawHedge(x, y, colour, 0.32);
     }
 
     // ghost
