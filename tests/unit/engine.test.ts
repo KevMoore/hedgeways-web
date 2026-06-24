@@ -128,6 +128,22 @@ describe("placement (Qwirkle-strict)", () => {
     expect(validateMove(b, bad).ok).toBe(false);
   });
 
+  it("a single open corner unseals an entire ringed field", () => {
+    const b = new Board();
+    const wall = (x: number, y: number) => b.cells.set(key(x, y), { colour: "G", tileId: 0 });
+    for (let x = 0; x <= 5; x++) {
+      wall(x, 0);
+      wall(x, 6);
+    }
+    for (let y = 1; y <= 5; y++) {
+      wall(0, y);
+      wall(5, y);
+    }
+    expect(findEnclosed(b).size).toBe(20); // fully sealed
+    b.cells.delete(key(0, 0)); // open one corner -> diagonal-only -> the field leaks out
+    expect(findEnclosed(b).size).toBe(0);
+  });
+
   it("does not enclose a cell whose corner is only diagonally closed (leaks out)", () => {
     const b = new Board();
     // (1,1) is ringed by 4 orthogonal walls, BUT the corner (0,0) is open and the

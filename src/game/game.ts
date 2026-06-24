@@ -71,6 +71,11 @@ export class Game {
     this.gameOver = s.gameOver;
     this.winnerId = s.winnerId;
     this.consecutivePasses = s.passes;
+    // self-heal a stale save: recompute enclosure under current rules and drop
+    // any ownership for cells that are no longer truly enclosed
+    this.board.enclosed = findEnclosed(this.board);
+    for (const k of [...this.board.acreOwner.keys()])
+      if (!this.board.enclosed.has(k)) this.board.acreOwner.delete(k);
   }
 
   /** Deep, serializable snapshot of the whole game (for save/resume) — never aliases live state. */
@@ -142,6 +147,9 @@ export class Game {
         this.board.acreOwner.set(k, player.id);
       }
     this.board.enclosed = enclosedNow;
+    // keep ownership consistent with the truly-enclosed set (heals any stale claims)
+    for (const k of [...this.board.acreOwner.keys()])
+      if (!enclosedNow.has(k)) this.board.acreOwner.delete(k);
     player.score += newly.length;
 
     this.consecutivePasses = 0;
