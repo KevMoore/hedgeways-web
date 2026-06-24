@@ -4,9 +4,9 @@
  * Sheet: public/sprites/livestock.webp — 1024x1024, an 8x8 grid of 128px cells.
  * The background is already keyed to true alpha transparency offline, so the
  * renderer draws it directly (no runtime flood-fill). Frame index = row*8 + col
- * (0-based), left->right, top->bottom. Each animal spans two rows: Idle1-2,
- * Walk1-4, Action1-4 (peck/eat/graze), Happy1-4. Until the sheet loads the
- * renderer falls back to the animated emoji.
+ * (0-based), left->right, top->bottom. Each animal spans two rows (~13 distinct
+ * poses); the idle/walk/action/happy frame sets are classified per-animal in
+ * ANIMALS below. Until the sheet loads the renderer falls back to the emoji.
  */
 const COLS = 8;
 
@@ -17,12 +17,15 @@ interface AnimalFrames {
   happy: number[];
 }
 
-// keyed by the player-kit emoji used throughout the game
+// Keyed by the player-kit emoji. Frame indices are hand-classified to the actual
+// art: the sheet's poses aren't a clean idle/walk/action/happy run, and each
+// animal has only 2 (pig/cow) or 3 (chicken/sheep) head-down eat/peck/graze
+// frames, so the action cycle repeats one to fill four.
 const ANIMALS: Record<string, AnimalFrames> = {
-  "🐓": { idle: [0, 1], walk: [2, 3, 4, 5], action: [6, 7, 8, 9], happy: [10, 11, 12, 13] },
-  "🐷": { idle: [16, 17], walk: [18, 19, 20, 21], action: [22, 23, 24, 25], happy: [26, 27, 28, 29] },
-  "🐑": { idle: [32, 33], walk: [34, 35, 36, 37], action: [38, 39, 40, 41], happy: [42, 43, 44, 45] },
-  "🐮": { idle: [48, 49], walk: [50, 51, 52, 53], action: [54, 55, 56, 57], happy: [58, 59, 60, 61] },
+  "🐓": { idle: [0, 1], walk: [2, 3, 4, 5], action: [6, 8, 9, 8], happy: [10, 11, 12, 13] },
+  "🐷": { idle: [16, 17], walk: [18, 19, 20, 21], action: [22, 24, 22, 24], happy: [25, 26, 27, 28] },
+  "🐑": { idle: [32, 33], walk: [34, 35, 36, 37], action: [38, 40, 41, 40], happy: [42, 43, 44, 45] },
+  "🐮": { idle: [48, 49], walk: [50, 51, 52, 53], action: [54, 56, 54, 56], happy: [57, 58, 59, 60] },
 };
 
 const SRC = "/sprites/livestock.webp";
