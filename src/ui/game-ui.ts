@@ -8,6 +8,7 @@ import type { Cell, Colour, Move, Orientation, PlacedTile, Tile } from "../game/
 import { COLOURS, key } from "../game/types";
 import gsap from "gsap";
 import { sfx } from "../audio";
+import { farmerSvg } from "./farmers";
 import { Scene } from "../render/scene";
 import { callout, confetti } from "./effects";
 import { showHowTo } from "./howto";
@@ -102,7 +103,7 @@ export class GameUI {
     this.renderHand(false, true);
     this.setStatus(
       hasMove
-        ? `Your turn — pick a hedge, then choose a highlighted square`
+        ? `Your turn — drag a hedge onto the field`
         : `No legal move — you must pass`,
     );
     this.updateButtons();
@@ -199,8 +200,8 @@ export class GameUI {
       const left = 3 - this.pending.length;
       this.setStatus(
         left > 0
-          ? `${this.pending.length} laid — tap Confirm, or add up to ${left} more`
-          : `3 hedges laid — tap Confirm turn`,
+          ? `${this.pending.length} hedge${this.pending.length === 1 ? "" : "s"} laid — confirm, or plant up to ${left} more`
+          : `3 hedges laid — confirm to end the day`,
       );
       return;
     }
@@ -291,31 +292,23 @@ export class GameUI {
     this.beginTurn();
   }
 
-  // ---- highlights ----
+  // Build the cell -> placement map so tapping/dragging onto a cell knows
+  // which placement to apply. Highlights (visible dots) are intentionally
+  // NOT shown — the player discovers valid moves themselves; the ghost
+  // preview during a drag/tap confirms validity in the moment.
   private refreshHighlights(): void {
     this.placementByCell.clear();
-    if (this.selectedId == null) {
-      this.scene.setHighlights(new Map());
-      return;
-    }
+    this.scene.setHighlights(new Map());
+    if (this.selectedId == null) return;
     const tile = this.handTile(this.selectedId)!;
     const cands = this.anchorsFor(tile, ALL_ORI[this.oriIndex]);
-    // cell -> colour of the segment that would occupy it (faded ghost preview)
-    const cover = new Map<string, Colour>();
-    // map every covered cell -> a placement, so tapping anywhere on the hedge works.
-    // prefer the placement whose anchor is the tapped cell for predictable behaviour.
     for (const [anchorKey, cand] of cands) {
       this.placementByCell.set(anchorKey, cand);
-      for (const c of cand.cells) cover.set(key(c.x, c.y), c.colour);
-    }
-    for (const cand of cands.values()) {
       for (const c of cand.cells) {
         const ck = key(c.x, c.y);
         if (!this.placementByCell.has(ck)) this.placementByCell.set(ck, cand);
-        if (!cover.has(ck)) cover.set(ck, c.colour);
       }
     }
-    this.scene.setHighlights(cover);
   }
 
   /** Legal anchor cells (segment-0 position) for placing `tile` in this orientation now. */
@@ -407,11 +400,87 @@ export class GameUI {
         seg.style.boxShadow = `inset 0 0 0 2px ${COLOUR_HEX_DARK[c]}`;
         d.appendChild(seg);
       }
-      d.addEventListener("click", () => this.selectTile(tile.id));
+      this.attachTileInput(d, tile.id);
       el.appendChild(d);
     }
     if (animate)
       gsap.from([...el.children], { y: 14, opacity: 0, duration: 0.32, ease: "back.out(2)", stagger: 0.05 });
+  }
+
+  /**
+   * Hand chip input: short tap toggles selection (existing behaviour); a real
+   * drag picks the tile up, follows the finger/cursor with the ghost preview,
+   * and on release either places (if released over a valid board cell) or
+   * snaps back. Off-board release silently aborts.
+   */
+  private attachTileInput(d: HTMLElement, tileId: number): void {
+    const DRAG_SLOP = 8;
+    let startX = 0;
+    let startY = 0;
+    let pressed = false;
+    let dragging = false;
+    let pid = -1;
+    d.addEventListener("pointerdown", (e) => {
+      if (this.usedIds.has(tileId)) return;
+      if (this.pending.length >= MAX_LAY && this.selectedId !== tileId) return;
+      pressed = true;
+      dragging = false;
+      pid = e.pointerId;
+      startX = e.clientX;
+      startY = e.clientY;
+      try {
+        d.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+    });
+    d.addEventListener("pointermove", (e) => {
+      if (!pressed) return;
+      if (!dragging) {
+        if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_SLOP) return;
+        dragging = true;
+        // commit to the drag: select this tile so the ghost-preview path is live
+        if (this.selectedId !== tileId) {
+          this.selectedId = tileId;
+          this.oriIndex = this.firstUsableOri(tileId);
+          sfx.pickup();
+          this.refreshHighlights();
+          this.updateButtons();
+        }
+      }
+      // ghost-preview at the finger position (only while over the board)
+      if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
+        const [cx, cy] = this.scene.cellAtClient(e.clientX, e.clientY);
+        this.onHover(cx, cy);
+      } else {
+        this.scene.setGhost(null, false);
+      }
+    });
+    const finish = (e: PointerEvent) => {
+      if (!pressed) return;
+      const wasDrag = dragging;
+      pressed = false;
+      dragging = false;
+      try {
+        d.releasePointerCapture(pid);
+      } catch {
+        /* ignore */
+      }
+      if (!wasDrag) {
+        this.selectTile(tileId); // short tap toggles selection
+        return;
+      }
+      // Drag release: place if over a valid board cell, else abort
+      if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
+        const [cx, cy] = this.scene.cellAtClient(e.clientX, e.clientY);
+        this.onTapCell(cx, cy); // places, or flashInvalid + donkey
+      } else {
+        this.scene.setGhost(null, false); // off-board: silent abort
+      }
+      this.renderHand(false);
+    };
+    d.addEventListener("pointerup", finish);
+    d.addEventListener("pointercancel", finish);
   }
 
   private prevScores: number[] = [];
@@ -427,8 +496,9 @@ export class GameUI {
       chip.className = "pchip" + (active ? " active" : "") + (total === lead && lead > 0 ? " lead" : "");
       chip.style.setProperty("--pc", p.colour);
       const bonusTag = p.bonus > 0 ? `<span class="pbonus" title="${p.score} acres + ${p.bonus} streak">+${p.bonus}🔥</span>` : "";
+      const portrait = p.farmerId ? farmerSvg(p.farmerId, 28) : `<span class="panimal">${p.animal}</span>`;
       chip.innerHTML =
-        `<span class="panimal">${p.animal}</span>` +
+        `<span class="pfarmer">${portrait}</span>` +
         `<span class="pname">${p.name}</span>` +
         `<span class="pscore">${total}<small>🌿</small></span>` +
         bonusTag;
@@ -583,25 +653,30 @@ export class GameUI {
     const standings = this.game.standings();
     const winner = standings[0];
     const tie = standings.filter((p) => totalScore(p) === totalScore(winner)).length > 1;
-    const winLine = tie ? "It's a tie!" : winner.name === "You" ? "You win!" : `${winner.name} wins!`;
+    const winLine = tie
+      ? "Sundown — it's a tie!"
+      : winner.name === "You"
+        ? "Sundown — you win the farm!"
+        : `Sundown — ${winner.name} wins the farm!`;
     confetti();
     sfx.win();
     const back = document.createElement("div");
     back.className = "modal-back";
     back.innerHTML = `
       <div class="modal end">
-        <div class="trophy">${tie ? "🤝" : "🏆"}</div>
+        <div class="trophy">${tie ? "🤝" : "🚜"}</div>
         <h2>${winLine}</h2>
         <table>${standings
           .map((p, i) => {
             const bonusNote = p.bonus > 0 ? `<small> (${p.score} + ${p.bonus}🔥)</small>` : "";
-            return `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${p.animal} ${p.name}</td><td>${totalScore(p)} acre${totalScore(p) === 1 ? "" : "s"}${bonusNote}</td></tr>`;
+            const portrait = p.farmerId ? `<span class="endfarmer">${farmerSvg(p.farmerId, 32)}</span>` : `${p.animal}`;
+            return `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${portrait} ${p.name}</td><td>${totalScore(p)} acre${totalScore(p) === 1 ? "" : "s"}${bonusNote}</td></tr>`;
           })
           .join("")}</table>
         <div class="end-btns">
-          <button class="btn" id="end-inspect">Inspect board</button>
-          <button class="btn" id="end-menu">Main menu</button>
-          <button class="btn primary" id="end-again">Play again</button>
+          <button class="btn" id="end-inspect">View field</button>
+          <button class="btn" id="end-menu">Farmhouse</button>
+          <button class="btn primary" id="end-again">Next harvest</button>
         </div>
       </div>`;
     this.root.appendChild(back);

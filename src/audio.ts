@@ -199,7 +199,37 @@ export const sfx = {
     tone(380, 0.05, "square", 0.05);
   },
   invalid() {
-    tone(140, 0.16, "sawtooth", 0.06);
+    // Cartoony donkey "hee-haw" for an illegal move — a saw-tone rising "hee"
+    // followed immediately by a falling "haw". Sample at /audio/animals/donkey.mp3
+    // would override, but the procedural version stands alone.
+    const a = ac();
+    if (!a) return;
+    const now = a.currentTime;
+    // Hee
+    const hee = a.createOscillator();
+    const hg = a.createGain();
+    hee.type = "sawtooth";
+    hee.frequency.setValueAtTime(640, now);
+    hee.frequency.linearRampToValueAtTime(720, now + 0.18);
+    hg.gain.setValueAtTime(0, now);
+    hg.gain.linearRampToValueAtTime(0.16, now + 0.02);
+    hg.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+    hee.connect(hg).connect(a.destination);
+    hee.start(now);
+    hee.stop(now + 0.25);
+    // Haw
+    const haw = a.createOscillator();
+    const hwg = a.createGain();
+    haw.type = "sawtooth";
+    const hawT = now + 0.22;
+    haw.frequency.setValueAtTime(220, hawT);
+    haw.frequency.linearRampToValueAtTime(140, hawT + 0.34);
+    hwg.gain.setValueAtTime(0, hawT);
+    hwg.gain.linearRampToValueAtTime(0.2, hawT + 0.02);
+    hwg.gain.exponentialRampToValueAtTime(0.001, hawT + 0.4);
+    haw.connect(hwg).connect(a.destination);
+    haw.start(hawT);
+    haw.stop(hawT + 0.44);
   },
   score(acres: number) {
     const n = Math.min(acres, 6);

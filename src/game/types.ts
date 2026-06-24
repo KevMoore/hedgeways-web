@@ -46,6 +46,8 @@ export interface Player {
   streak: number; // consecutive own turns that sealed ≥1 acre
   colour: string; // player colour (fills their claimed acres)
   animal: string; // livestock emoji stamped on their acres
+  farmerId?: string; // matches a PLAYER_KITS farmerId — drives the farmer avatar
+  farmerName?: string; // friendly farmer name (overrides the generic "Bot N" / "You" in chips)
 }
 
 export const key = (x: number, y: number): string => `${x},${y}`;

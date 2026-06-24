@@ -7,12 +7,15 @@ export const MAX_LAY = 3; // tiles per turn
 export interface PlayerKit {
   animal: string;
   colour: string;
+  /** Farmer character ID — picks one of the drawn farmer portraits. */
+  farmerId: "rosie" | "jack" | "molly" | "billy";
+  farmerName: string;
 }
 export const PLAYER_KITS: PlayerKit[] = [
-  { animal: "🐷", colour: "#e0524d" },
-  { animal: "🐮", colour: "#7b61ff" },
-  { animal: "🐑", colour: "#1f9e8f" },
-  { animal: "🐓", colour: "#e0852b" },
+  { animal: "🐷", colour: "#e0524d", farmerId: "rosie", farmerName: "Farmer Rosie" },
+  { animal: "🐮", colour: "#7b61ff", farmerId: "jack", farmerName: "Farmer Jack" },
+  { animal: "🐑", colour: "#1f9e8f", farmerId: "molly", farmerName: "Farmer Molly" },
+  { animal: "🐓", colour: "#e0852b", farmerId: "billy", farmerName: "Farmer Billy" },
 ];
 
 /** Vivid leaf colours matching the physical tiles (kept close to the company brand palette). */

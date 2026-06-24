@@ -7,6 +7,7 @@ import type { GameConfig, GameSnapshot } from "./game/game";
 import { describeSave, loadActive } from "./game/persistence";
 import { PLAYER_KITS } from "./game/constants";
 import { mountHomeCritters } from "./ui/home-critters";
+import { farmerSvg } from "./ui/farmers";
 import { sfx } from "./audio";
 
 const app = document.getElementById("app")!;
@@ -65,7 +66,7 @@ function renderStart(): void {
     <div class="start">
       <div class="logo">Hedge<span>ways</span></div>
       <div class="hedge-row" aria-hidden="true">${PLAYER_KITS.map((k, i) => `<span style="--c:${k.colour};--i:${i}" data-animal="${k.animal}"></span>`).join("")}</div>
-      <p class="tag">Lay hedges, enclose fields, claim the most acres of land.</p>
+      <p class="tag">Plant hedges, enclose fields, claim the most acres of farmland.</p>
       ${
         resumable
           ? `<button class="btn primary resume" id="resume">▶ Resume game<small>${describeSave(resumable)}</small></button>`
@@ -78,11 +79,11 @@ function renderStart(): void {
           </div>
         </label>
         <div id="slots" class="slots"></div>
-        <label class="count-row">Your livestock
+        <label class="count-row">Your farmer
           <div class="animals" id="animals">
             ${PLAYER_KITS.map(
               (k, i) =>
-                `<button data-a="${i}" style="--pc:${k.colour}">${k.animal}</button>`,
+                `<button data-a="${i}" title="${k.farmerName}" style="--pc:${k.colour}"><span class="apic">${farmerSvg(k.farmerId, 38)}</span><span class="aani">${k.animal}</span></button>`,
             ).join("")}
           </div>
         </label>
@@ -165,11 +166,13 @@ function renderStart(): void {
       const kitIdx = i === firstHuman ? humanKit : free[ptr++];
       const kit = PLAYER_KITS[kitIdx];
       return {
-        name: s.type === "human" ? "You" : `Bot ${i + 1}`,
+        name: s.type === "human" ? "You" : kit.farmerName,
         isBot: s.type === "bot",
         difficulty: s.diff,
         colour: kit.colour,
         animal: kit.animal,
+        farmerId: kit.farmerId,
+        farmerName: kit.farmerName,
       };
     });
     startGame({ players, seed: (Math.random() * 0xffffffff) >>> 0 });

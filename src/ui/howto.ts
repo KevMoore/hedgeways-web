@@ -270,9 +270,9 @@ export function showHowTo(): void {
 
   card.append(
     section(
-      "🏆",
-      "Winning & the end",
-      "The game ends when a farmer lays their last hedge (empty hand and empty bag). The farmer with the most acres wins. Sealed fields are locked — no hedges may be laid inside them.",
+      "🚜",
+      "Sundown & the harvest",
+      "The day ends when a farmer plants their last hedge (empty hand and empty bag). The farmer with the most acres wins the harvest. Sealed fields are locked — no hedges may be planted inside them.",
     ),
   );
 

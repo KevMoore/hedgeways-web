@@ -27,6 +27,8 @@ export interface PlayerConfig {
   difficulty?: Difficulty;
   colour?: string;
   animal?: string;
+  farmerId?: string;
+  farmerName?: string;
 }
 
 export interface GameConfig {
@@ -105,6 +107,8 @@ export class Game {
       streak: p.streak ?? 0,
       colour: p.colour ?? PLAYER_KITS[i % PLAYER_KITS.length].colour,
       animal: p.animal ?? PLAYER_KITS[i % PLAYER_KITS.length].animal,
+      farmerId: p.farmerId ?? PLAYER_KITS[i % PLAYER_KITS.length].farmerId,
+      farmerName: p.farmerName ?? PLAYER_KITS[i % PLAYER_KITS.length].farmerName,
     }));
     this.current = s.current;
     this.turn = s.turn;
@@ -154,6 +158,8 @@ export class Game {
       streak: 0,
       colour: p.colour ?? PLAYER_KITS[id % PLAYER_KITS.length].colour,
       animal: p.animal ?? PLAYER_KITS[id % PLAYER_KITS.length].animal,
+      farmerId: p.farmerId ?? PLAYER_KITS[id % PLAYER_KITS.length].farmerId,
+      farmerName: p.farmerName ?? PLAYER_KITS[id % PLAYER_KITS.length].farmerName,
     }));
   }
 

@@ -965,6 +965,11 @@ export class Scene {
     const rect = this.canvas.getBoundingClientRect();
     return this.screenToCell(clientX - rect.left, clientY - rect.top);
   }
+  /** true if the client point is inside the board canvas (drag-and-drop use). */
+  pointOverBoard(clientX: number, clientY: number): boolean {
+    const r = this.canvas.getBoundingClientRect();
+    return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
+  }
 }
 
 function easeOutBack(p: number): number {
