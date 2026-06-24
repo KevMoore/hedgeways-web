@@ -1,10 +1,23 @@
 import { Board, DIRS } from "./board";
 import { key } from "./types";
 
+// 8-connectivity for the exterior flood: the outside can slip through a diagonal
+// corner gap, so a field is sealed ONLY when its hedges are edge-continuous.
+const DIRS8: ReadonlyArray<[number, number]> = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+];
+
 /**
- * All empty cells that are enclosed: cannot reach the open exterior via
- * orthogonal moves through empty cells. (4-connectivity -> diagonal-only hedge
- * corners correctly do NOT seal a field.)
+ * All empty cells that are truly enclosed. The exterior is flooded with
+ * 8-connectivity (diagonal moves allowed), so hedges that touch only at a
+ * corner do NOT seal a field — the outside leaks through the diagonal gap.
  */
 export function findEnclosed(board: Board): Set<string> {
   const enclosed = new Set<string>();
@@ -37,7 +50,7 @@ export function findEnclosed(board: Board): Set<string> {
   }
   while (stack.length) {
     const [x, y] = stack.pop()!;
-    for (const [dx, dy] of DIRS) pushIfOpen(x + dx, y + dy);
+    for (const [dx, dy] of DIRS8) pushIfOpen(x + dx, y + dy);
   }
 
   // any empty interior cell not reached by the exterior is enclosed

@@ -243,7 +243,7 @@ export class Scene {
     }
 
     // basic collision: push overlapping animals apart (but never out of the field)
-    const min = 0.62;
+    const min = 0.46;
     const min2 = min * min;
     const inField = (x: number, y: number) => this.enclosed.has(key(Math.floor(x), Math.floor(y)));
     for (let i = 0; i < list.length; i++) {
@@ -277,7 +277,7 @@ export class Scene {
 
   private drawCritters(): void {
     const ctx = this.ctx;
-    const size = this.scale * 0.8;
+    const size = this.scale * 0.58;
     const ordered = [...this.critters.values()].sort((a, b) => a.y - b.y); // back-to-front
     for (const c of ordered) {
       const [px, py] = this.worldToScreen(c.x, c.y);

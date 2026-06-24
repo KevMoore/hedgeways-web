@@ -128,6 +128,19 @@ describe("placement (Qwirkle-strict)", () => {
     expect(validateMove(b, bad).ok).toBe(false);
   });
 
+  it("does not enclose a cell whose corner is only diagonally closed (leaks out)", () => {
+    const b = new Board();
+    // (1,1) is ringed by 4 orthogonal walls, BUT the corner (0,0) is open and the
+    // walls (1,0)/(0,1) touch only diagonally -> the field leaks through the corner
+    ring(b, [
+      [1, 0],
+      [0, 1],
+      [2, 1],
+      [1, 2],
+    ]);
+    expect(findEnclosed(b).size).toBe(0);
+  });
+
   it("does not enclose a field whose walls only meet at corners", () => {
     const b = new Board();
     // a diagonal 'staircase' of hedges around (1,1): they touch only at corners,
