@@ -2,12 +2,10 @@ import {
   ACRE_HEX,
   BOARD_BG,
   COLOUR_HEX,
-  COLOUR_HEX_DARK,
-  FRAME_CRACK_HEX,
   HEDGE_BASE,
   HEDGE_DANGER,
-  HEDGE_DANGER_LEAVES,
-  HEDGE_LEAVES,
+  HEDGE_DANGER_DARK,
+  HEDGE_DARK,
 } from "../game/constants";
 import type { Cell, Colour, PlacedCell } from "../game/types";
 import { key } from "../game/types";
@@ -598,7 +596,12 @@ export class Scene {
         const p = (now - t0) / POP_MS;
         pop = p >= 1 ? 1 : easeOutBack(p);
       }
-      this.drawHedge(x, y, cell.colour, 1, false, pop);
+      const mask =
+        (this.cells.has(key(x, y - 1)) ? 1 : 0) |
+        (this.cells.has(key(x + 1, y)) ? 2 : 0) |
+        (this.cells.has(key(x, y + 1)) ? 4 : 0) |
+        (this.cells.has(key(x - 1, y)) ? 8 : 0);
+      this.drawHedge(x, y, cell.colour, 1, false, pop, mask);
     }
 
     // free-range livestock roaming inside the fields (only if the sheet loaded)
@@ -608,15 +611,30 @@ export class Scene {
       this.drawCritters();
     }
 
-    // highlights — faded ghost hedges showing where the selected tile could sit
+    // highlights — quiet hint that the selected tile could sit here (a small
+    // colour dot in the centre, no hedge frame so the existing board stays clear)
     for (const [k, colour] of this.highlights) {
       const [x, y] = k.split(",").map(Number);
-      this.drawHedge(x, y, colour, 0.32);
+      const [hpx, hpy] = this.worldToScreen(x, y);
+      const hs = this.scale;
+      ctx.fillStyle = hexA(COLOUR_HEX[colour], 0.35);
+      ctx.beginPath();
+      ctx.arc(hpx + hs / 2, hpy + hs / 2, hs * 0.18, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // ghost
     if (this.ghost) {
-      for (const c of this.ghost.cells) this.drawHedge(c.x, c.y, c.colour, this.ghost.valid ? 0.55 : 0.4, !this.ghost.valid);
+      const gKeys = new Set(this.ghost.cells.map((c) => key(c.x, c.y)));
+      const hasHedge = (x: number, y: number) => this.cells.has(key(x, y)) || gKeys.has(key(x, y));
+      for (const c of this.ghost.cells) {
+        const mask =
+          (hasHedge(c.x, c.y - 1) ? 1 : 0) |
+          (hasHedge(c.x + 1, c.y) ? 2 : 0) |
+          (hasHedge(c.x, c.y + 1) ? 4 : 0) |
+          (hasHedge(c.x - 1, c.y) ? 8 : 0);
+        this.drawHedge(c.x, c.y, c.colour, this.ghost.valid ? 0.55 : 0.4, !this.ghost.valid, 1, mask);
+      }
     }
 
     // floating "+N acres" pops
@@ -810,15 +828,26 @@ export class Scene {
     ctx.fillRect(px, py, this.scale, this.scale);
   }
 
-  /** Procedural hedge cell: dark wooden frame + a bushy foliage cluster. */
-  private drawHedge(x: number, y: number, colour: Colour, alpha: number, danger = false, pop = 1): void {
+  /**
+   * Hedge cell: solid colour panel with bushy hedge puffs along its OUTWARD-
+   * facing edges only. `hedgeMask` is a bitmask of sides that already abut
+   * another hedge cell (1=N, 2=E, 4=S, 8=W); those sides skip their puffs so
+   * adjacent cells flow into one continuous coloured strip.
+   */
+  private drawHedge(
+    x: number,
+    y: number,
+    colour: Colour,
+    alpha: number,
+    danger = false,
+    pop = 1,
+    hedgeMask = 0,
+  ): void {
     const ctx = this.ctx;
     const [px, py] = this.worldToScreen(x, y);
     const s = this.scale;
     const cx = px + s / 2;
     const cy = py + s / 2;
-    const gap = Math.max(1, s * 0.045);
-    const seed = hash(x, y);
 
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -828,37 +857,105 @@ export class Scene {
       ctx.translate(-cx, -cy);
     }
 
-    // clipped hedge body
-    const r = s * 0.16;
-    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, r);
-    ctx.fillStyle = danger ? HEDGE_DANGER : HEDGE_BASE;
-    ctx.fill();
-    // bushy leaf dapples (deterministic per cell) so the frame reads as a hedge
-    ctx.save();
-    ctx.clip();
-    const leaves = danger ? HEDGE_DANGER_LEAVES : HEDGE_LEAVES;
-    const rng = makeRng(seed);
-    const n = Math.max(7, Math.round(s * 0.34));
-    for (let i = 0; i < n; i++) {
-      const lx = px + gap + rng() * (s - gap * 2);
-      const ly = py + gap + rng() * (s - gap * 2);
-      const lr = s * (0.08 + rng() * 0.08);
-      ctx.fillStyle = leaves[(rng() * leaves.length) | 0];
-      ctx.beginPath();
-      ctx.arc(lx, ly, lr, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-    // crisp dark edge keeps neighbouring hedges legible as separate tiles
-    roundRect(ctx, px + gap, py + gap, s - gap * 2, s - gap * 2, r);
-    ctx.strokeStyle = FRAME_CRACK_HEX;
-    ctx.lineWidth = Math.max(1, s * 0.05);
-    ctx.stroke();
+    // solid colour panel (or white in danger preview)
+    ctx.fillStyle = danger ? "#ffffff" : COLOUR_HEX[colour];
+    ctx.fillRect(px, py, s, s);
 
-    // the segment's colour as a bold splodge nested inside the hedge
-    const fill = danger ? "#ffffff" : COLOUR_HEX[colour];
-    const dark = danger ? "#cfcfcf" : COLOUR_HEX_DARK[colour];
-    splat(ctx, cx, cy, s * 0.3, seed, fill, dark);
+    const nH = (hedgeMask & 1) !== 0;
+    const eH = (hedgeMask & 2) !== 0;
+    const sH = (hedgeMask & 4) !== 0;
+    const wH = (hedgeMask & 8) !== 0;
+    if (nH && eH && sH && wH) {
+      ctx.restore();
+      return; // fully interior: no perimeter hedge to draw
+    }
+
+    // Hedge perimeter: a chunky continuous base stripe along outward-facing
+    // sides — like an English-countryside boundary hedge — with variable
+    // bushy puffs and a soft sun-catch highlight on the very outer rim.
+    const body = danger ? HEDGE_DANGER : HEDGE_BASE;
+    const dark = danger ? HEDGE_DANGER_DARK : HEDGE_DARK;
+
+    // continuous base stripe (the "joined" perimeter) — thicker for hedgerow heft
+    const stripe = s * 0.15;
+    ctx.fillStyle = dark;
+    if (!nH) ctx.fillRect(px, py, s, stripe);
+    if (!sH) ctx.fillRect(px, py + s - stripe, s, stripe);
+    if (!wH) ctx.fillRect(px, py, stripe, s);
+    if (!eH) ctx.fillRect(px + s - stripe, py, stripe, s);
+
+    // thin dark separator on internal edges (so adjacent placed cells still
+    // read as individual tiles). Inset by the hedge-stripe thickness on the
+    // perpendicular outward sides so the separator never cuts through hedge.
+    ctx.fillStyle = `rgba(20,40,24,0.35)`;
+    const sep = Math.max(1, s * 0.022);
+    const iN = nH ? 0 : stripe;
+    const iE = eH ? 0 : stripe;
+    const iS = sH ? 0 : stripe;
+    const iW = wH ? 0 : stripe;
+    if (nH) ctx.fillRect(px + iW, py, s - iW - iE, sep);
+    if (eH) ctx.fillRect(px + s - sep, py + iN, sep, s - iN - iS);
+    if (sH) ctx.fillRect(px + iW, py + s - sep, s - iW - iE, sep);
+    if (wH) ctx.fillRect(px, py + iN, sep, s - iN - iS);
+
+    // Bushy clumps along the outward sides — fewer, larger puffs with size
+    // variation so the hedge reads as individual shrubs, not a uniform ring.
+    const rng = makeRng(hash(x, y));
+    const puffsPerSide = Math.max(6, Math.round(s * 0.22));
+    const margin = s * 0.07;
+    const puff = (cxp: number, cyp: number, r: number) => {
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(cxp, cyp, r * 1.06, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(cxp, cyp, r * 0.93, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    // Always draw the full puff sequence on each outward side, including
+    // corners — adjacent cells overlap their corner puffs to form a
+    // continuous ribbon around the whole hedge group.
+    const side = (
+      enabled: boolean,
+      xAt: (t: number) => number,
+      yAt: (t: number) => number,
+    ) => {
+      if (!enabled) return;
+      for (let i = 0; i <= puffsPerSide; i++) {
+        const t = i / puffsPerSide;
+        const jx = (rng() - 0.5) * s * 0.035;
+        const jy = (rng() - 0.5) * s * 0.035;
+        // most puffs are medium; ~25% are big bushy clumps
+        const big = rng() < 0.25;
+        const r = s * (big ? 0.12 + rng() * 0.025 : 0.085 + rng() * 0.025);
+        puff(xAt(t) + jx, yAt(t) + jy, r);
+      }
+    };
+    side(!nH, (t) => px + margin + t * (s - 2 * margin), () => py + margin);
+    side(!eH, () => px + s - margin, (t) => py + margin + t * (s - 2 * margin));
+    side(!sH, (t) => px + margin + t * (s - 2 * margin), () => py + s - margin);
+    side(!wH, () => px + margin, (t) => py + margin + t * (s - 2 * margin));
+
+    // Sun-catch highlights: a few brighter dots scattered along the outer rim
+    const rng2 = makeRng(hash(x, y) ^ 0x5a7d);
+    const hl = body === HEDGE_DANGER ? "rgba(255,210,170,0.55)" : "rgba(180,230,150,0.7)";
+    ctx.fillStyle = hl;
+    const dot = (enabled: boolean, xAt: (t: number) => number, yAt: (t: number) => number) => {
+      if (!enabled) return;
+      const n = Math.max(2, Math.round(s * 0.07));
+      for (let i = 0; i < n; i++) {
+        const t = (i + 0.3 + rng2() * 0.4) / n;
+        const r = s * (0.02 + rng2() * 0.015);
+        ctx.beginPath();
+        ctx.arc(xAt(t), yAt(t), r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+    dot(!nH, (t) => px + margin + t * (s - 2 * margin), () => py + margin * 0.6);
+    dot(!eH, () => px + s - margin * 0.6, (t) => py + margin + t * (s - 2 * margin));
+    dot(!sH, (t) => px + margin + t * (s - 2 * margin), () => py + s - margin * 0.6);
+    dot(!wH, () => px + margin * 0.6, (t) => py + margin + t * (s - 2 * margin));
 
     ctx.restore();
   }
@@ -870,67 +967,11 @@ export class Scene {
   }
 }
 
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
 function easeOutBack(p: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
   const x = p - 1;
   return 1 + c3 * x * x * x + c1 * x * x;
-}
-
-/** Build a spiky, irregular "paint splat" path (alternating long/short spikes). */
-function splatPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number, seed: number) {
-  const rand = makeRng(seed);
-  const spikes = 11;
-  ctx.beginPath();
-  for (let i = 0; i < spikes; i++) {
-    const ang = (i / spikes) * Math.PI * 2 + rand() * 0.18;
-    const outer = radius * (0.92 + rand() * 0.18);
-    const inner = radius * (0.46 + rand() * 0.14);
-    const ox = cx + Math.cos(ang) * outer;
-    const oy = cy + Math.sin(ang) * outer;
-    const midAng = ang + Math.PI / spikes;
-    const ix = cx + Math.cos(midAng) * inner;
-    const iy = cy + Math.sin(midAng) * inner;
-    if (i === 0) ctx.moveTo(ox, oy);
-    else ctx.lineTo(ox, oy);
-    ctx.lineTo(ix, iy);
-  }
-  ctx.closePath();
-}
-
-/** One bold spiky colour splat per hedge segment, like the hand-painted tiles. */
-function splat(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  radius: number,
-  seed: number,
-  fill: string,
-  dark: string,
-) {
-  ctx.lineJoin = "round";
-  // dark backing splat (depth + outline)
-  splatPath(ctx, cx, cy, radius * 1.04, seed);
-  ctx.fillStyle = dark;
-  ctx.fill();
-  // bright top splat
-  splatPath(ctx, cx, cy, radius * 0.92, seed ^ 0x9e37);
-  ctx.fillStyle = fill;
-  ctx.fill();
-  // subtle highlight blob
-  splatPath(ctx, cx - radius * 0.12, cy - radius * 0.12, radius * 0.4, seed ^ 0x55aa);
-  ctx.fillStyle = "rgba(255,255,255,0.22)";
-  ctx.fill();
 }
 
 /** "#rrggbb" -> "rgba(r,g,b,a)" */

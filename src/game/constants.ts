@@ -44,8 +44,10 @@ export const FRAME_CRACK_HEX = "#0c1a12";
 export const ACRE_HEX = "#dff0c8"; // enclosed field fill
 export const BOARD_BG = "#eef3e6";
 
-/** Leafy hedge tones for the board tile: a clipped bush framing the colour splodge. */
-export const HEDGE_BASE = "#234b2f";
-export const HEDGE_LEAVES = ["#2c5e38", "#3c7a45", "#52a157", "#21482d"];
-export const HEDGE_DANGER = "#5e2a2a";
+/** Leafy hedge tones — lighter green so the perimeter reads as fresh greenery. */
+export const HEDGE_BASE = "#4b9a55";
+export const HEDGE_DARK = "#2c5e38";
+export const HEDGE_LEAVES = ["#3c7a45", "#5cb060", "#7ac172", "#2c5e38"];
+export const HEDGE_DANGER = "#b65a44";
+export const HEDGE_DANGER_DARK = "#7a3a2c";
 export const HEDGE_DANGER_LEAVES = ["#7a3a32", "#9a4a3a", "#b65a44", "#5e2a2a"];
