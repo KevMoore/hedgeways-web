@@ -243,26 +243,14 @@ export class GameUI {
     if (this.pending.length >= MAX_LAY) return; // at most 3 hedges per turn
     const becomingSelected = this.selectedId !== id;
     this.selectedId = becomingSelected ? id : null;
-    if (becomingSelected) {
-      // Keep the player's chosen orientation if it has legal placements for
-      // the newly picked tile — so rotating once is enough for the whole turn.
-      const tile = this.handTile(id)!;
-      if (this.anchorsFor(tile, ALL_ORI[this.oriIndex]).size === 0) {
-        this.oriIndex = this.firstUsableOri(id);
-      }
-    }
+    // The orientation NEVER changes silently between picks. The player
+    // controls rotation via the Rotate button. If the current orientation
+    // has no legal placements for this tile, every cell will read red and
+    // the player rotates to find a valid one.
     sfx.pickup();
     this.renderHand(false);
     this.refreshHighlights();
     this.updateButtons();
-  }
-
-  private firstUsableOri(id: number): number {
-    const tile = this.handTile(id);
-    if (!tile) return 0;
-    const oris = isPalindrome(tile) ? [0, 1] : [0, 1, 2, 3];
-    for (const i of oris) if (this.anchorsFor(tile, ALL_ORI[i]).size > 0) return i;
-    return oris[0];
   }
 
   private rotate(): void {
@@ -496,15 +484,10 @@ export class GameUI {
       if (!dragging) {
         if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_SLOP) return;
         dragging = true;
-        // commit to the drag: select this tile so the ghost-preview path is live
+        // commit to the drag: select this tile so the ghost-preview path is live.
+        // Orientation is whatever the player last chose — never auto-flipped.
         if (this.selectedId !== tileId) {
           this.selectedId = tileId;
-          // preserve the current orientation if it still has legal placements
-          // for this tile (so a rotate before the drag isn't thrown away)
-          const tile = this.handTile(tileId)!;
-          if (this.anchorsFor(tile, ALL_ORI[this.oriIndex]).size === 0) {
-            this.oriIndex = this.firstUsableOri(tileId);
-          }
           sfx.pickup();
           this.refreshHighlights();
           this.updateButtons();
