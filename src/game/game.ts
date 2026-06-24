@@ -39,8 +39,39 @@ export interface TurnResult {
   reason?: string;
   scored?: number;
   newlyEnclosed?: string[];
+  fields?: number; // distinct fields sealed this move
+  streak?: number; // actor's scoring streak after this move
+  bonus?: number; // flair points awarded this move (streak + mega)
+  mega?: boolean; // exceptional single move (≥3 acres or ≥2 fields)
   passed?: boolean;
   ended?: boolean;
+}
+
+/** Winning/ranking total: rules-pure acres plus streak/mega flair points. */
+export const totalScore = (p: Player): number => p.score + (p.bonus ?? 0);
+
+/** Count the distinct 4-connected regions among a set of cell keys. */
+function countRegions(cellKeys: string[]): number {
+  const set = new Set(cellKeys);
+  const seen = new Set<string>();
+  let regions = 0;
+  for (const start of cellKeys) {
+    if (seen.has(start)) continue;
+    regions++;
+    const stack = [start];
+    seen.add(start);
+    while (stack.length) {
+      const [x, y] = stack.pop()!.split(",").map(Number);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nk = `${x + dx},${y + dy}`;
+        if (set.has(nk) && !seen.has(nk)) {
+          seen.add(nk);
+          stack.push(nk);
+        }
+      }
+    }
+  }
+  return regions;
 }
 
 export class Game {
@@ -70,6 +101,8 @@ export class Game {
     this.players = s.players.map((p, i) => ({
       ...p,
       hand: p.hand.map((t) => ({ id: t.id, segments: [...t.segments] })),
+      bonus: p.bonus ?? 0, // backfill saves written before streak flair existed
+      streak: p.streak ?? 0,
       colour: p.colour ?? PLAYER_KITS[i % PLAYER_KITS.length].colour,
       animal: p.animal ?? PLAYER_KITS[i % PLAYER_KITS.length].animal,
     }));
@@ -117,6 +150,8 @@ export class Game {
       difficulty: p.difficulty ?? "medium",
       hand: this.bag.splice(0, HAND_SIZE),
       score: 0,
+      bonus: 0,
+      streak: 0,
       colour: p.colour ?? PLAYER_KITS[id % PLAYER_KITS.length].colour,
       animal: p.animal ?? PLAYER_KITS[id % PLAYER_KITS.length].animal,
     }));
@@ -164,7 +199,17 @@ export class Game {
       if (!enclosedNow.has(k)) this.board.acreOwner.delete(k);
     player.score += newly.length;
 
+    // streak/mega flair (cosmetic + small bonus on top of acres)
+    const scored = newly.length;
+    const fields = scored > 0 ? countRegions(newly) : 0;
+    const mega = scored >= 3 || fields >= 2;
+    player.streak = scored > 0 ? player.streak + 1 : 0;
+    const streakBonus = player.streak >= 2 ? Math.min(player.streak - 1, 3) : 0;
+    const bonus = scored > 0 ? streakBonus + (mega ? 1 : 0) : 0;
+    player.bonus += bonus;
+
     this.consecutivePasses = 0;
+    const flair = { scored, newlyEnclosed: newly, fields, streak: player.streak, bonus, mega };
 
     // replenish
     while (player.hand.length < HAND_SIZE && this.bag.length > 0) player.hand.push(this.bag.pop()!);
@@ -172,16 +217,17 @@ export class Game {
     // end: a farmer has laid their last hedge (empty hand AND empty bag)
     if (player.hand.length === 0 && this.bag.length === 0) {
       this.endGame();
-      return { ok: true, scored: newly.length, newlyEnclosed: newly, ended: true };
+      return { ok: true, ...flair, ended: true };
     }
 
     this.advance();
-    return { ok: true, scored: newly.length, newlyEnclosed: newly };
+    return { ok: true, ...flair };
   }
 
   /** Current player has no legal move (or chooses to pass). */
   pass(): TurnResult {
     if (this.gameOver) return { ok: false, reason: "game over" };
+    this.currentPlayer.streak = 0; // a pass breaks the scoring streak
     this.consecutivePasses++;
     if (this.consecutivePasses >= this.players.length) {
       this.endGame();
@@ -201,16 +247,16 @@ export class Game {
     let best = -1;
     let bestScore = -Infinity;
     for (const p of this.players) {
-      if (p.score > bestScore) {
-        bestScore = p.score;
+      if (totalScore(p) > bestScore) {
+        bestScore = totalScore(p);
         best = p.id;
       }
     }
     this.winnerId = best;
   }
 
-  /** Players sorted by score desc (final standings). */
+  /** Players sorted by total (acres + flair) desc (final standings). */
   standings(): Player[] {
-    return [...this.players].sort((a, b) => b.score - a.score);
+    return [...this.players].sort((a, b) => totalScore(b) - totalScore(a));
   }
 }

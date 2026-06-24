@@ -208,4 +208,9 @@ export const sfx = {
   win() {
     [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.3, "triangle", 0.13, i * 0.12));
   },
+  /** Rising arpeggio whose length grows with the streak level — juice for a combo. */
+  streak(level: number) {
+    const steps = Math.min(2 + level, 6);
+    for (let i = 0; i < steps; i++) tone(523 * Math.pow(1.2, i), 0.16, "square", 0.09, i * 0.06);
+  },
 };

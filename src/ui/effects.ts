@@ -3,11 +3,11 @@ import { COLOUR_HEX } from "../game/constants";
 
 const PALETTE = Object.values(COLOUR_HEX);
 
-export function confetti(): void {
+export function confetti(count = 90): void {
   const layer = document.createElement("div");
   layer.className = "confetti";
   document.body.appendChild(layer);
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < count; i++) {
     const p = document.createElement("i");
     p.style.left = Math.random() * 100 + "vw";
     p.style.background = PALETTE[i % PALETTE.length];
@@ -18,7 +18,7 @@ export function confetti(): void {
   setTimeout(() => layer.remove(), 3400);
 }
 
-type CalloutKind = "info" | "score" | "pass";
+type CalloutKind = "info" | "score" | "pass" | "streak" | "low";
 
 export function callout(text: string, kind: CalloutKind = "info"): void {
   // only one callout at a time so they never overlap
@@ -27,12 +27,13 @@ export function callout(text: string, kind: CalloutKind = "info"): void {
   el.className = `callout ${kind}`;
   el.textContent = text;
   document.body.appendChild(el);
+  const big = kind === "score" || kind === "streak";
   const tl = gsap.timeline({ onComplete: () => el.remove() });
   tl.fromTo(
     el,
     { y: 18, scale: 0.7, opacity: 0 },
     { y: 0, scale: 1, opacity: 1, duration: 0.28, ease: "back.out(2)" },
   )
-    .to(el, { duration: kind === "score" ? 1.0 : 0.7 })
+    .to(el, { duration: big ? 1.1 : 0.75 })
     .to(el, { y: -26, opacity: 0, duration: 0.4, ease: "power1.in" });
 }

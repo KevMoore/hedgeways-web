@@ -1,11 +1,11 @@
 import { chooseAiMove } from "../game/ai";
 import { isPalindrome, orient } from "../game/board";
-import { COLOUR_HEX, COLOUR_HEX_DARK, MAX_LAY } from "../game/constants";
-import { Game, type GameConfig, type GameSnapshot } from "../game/game";
+import { COLOUR_HEX, COLOUR_HEX_DARK, COLOUR_NAME, MAX_LAY } from "../game/constants";
+import { Game, type GameConfig, type GameSnapshot, type TurnResult, totalScore } from "../game/game";
 import { generateMoves } from "../game/moves";
 import { validateMove } from "../game/placement";
 import type { Cell, Colour, Move, Orientation, PlacedTile, Tile } from "../game/types";
-import { key } from "../game/types";
+import { COLOURS, key } from "../game/types";
 import gsap from "gsap";
 import { sfx } from "../audio";
 import { Scene } from "../render/scene";
@@ -40,6 +40,8 @@ export class GameUI {
   private invalidTimer: number | null = null;
   private botTimer: number | null = null;
   private alive = true;
+  /** low-bag tiers already announced, so each callout fires at most once */
+  private bagWarned = new Set<number>();
   /** tappable cell -> the placement that would result (covers any of the hedge's cells) */
   private placementByCell = new Map<string, PlacedTile>();
 
@@ -53,6 +55,9 @@ export class GameUI {
     this.onQuit = opts.onQuit ?? null;
     this.onRestart = opts.onRestart ?? null;
     this.game = new Game(config, opts.restore);
+    // don't shout "bag low" on resume for tiers already passed before this session
+    const n0 = this.game.bag.length;
+    for (const t of [12, 6, 0]) if (n0 <= t) this.bagWarned.add(t);
     root.innerHTML = TEMPLATE;
     const canvas = root.querySelector<HTMLCanvasElement>(".board")!;
     this.scene = new Scene(canvas);
@@ -68,6 +73,7 @@ export class GameUI {
     root.querySelector("#btn-fit")!.addEventListener("click", () => this.scene.recenter());
     root.querySelector("#btn-sound")!.addEventListener("click", (e) => this.toggleSound(e));
     root.querySelector("#btn-quit")!.addEventListener("click", () => this.confirmQuit());
+    root.querySelector("#btn-bag")!.addEventListener("click", () => this.showBag());
 
     this.syncScene();
     this.renderHud();
@@ -113,21 +119,65 @@ export class GameUI {
       callout(`${actor.animal} ${actor.name} passes`, "pass");
     } else {
       const res = this.game.commit(move);
-      this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, actor);
+      this.afterCommit(res, actor);
     }
     this.syncScene();
     this.beginTurn();
   }
 
-  private afterCommit(newly: string[], scored: number, actor: { name: string; animal: string; colour?: string }): void {
+  private afterCommit(res: TurnResult, actor: { name: string; animal: string; colour?: string }): void {
+    const scored = res.scored ?? 0;
     if (scored > 0) {
-      this.scene.flashEnclosed(newly, actor.animal, actor.colour);
+      this.scene.flashEnclosed(res.newlyEnclosed ?? [], actor.animal, actor.colour);
       sfx.score(scored);
       sfx.celebrate(actor.animal);
-      callout(`${actor.animal} ${actor.name} encloses ${scored} acre${scored === 1 ? "" : "s"}!`, "score");
+      this.streakCallout(res, actor);
     } else {
       sfx.place();
     }
+    this.checkBagLow();
+  }
+
+  /** Escalating scoring callout: Double / Triple / On fire / Mega field, with the small bonus. */
+  private streakCallout(res: TurnResult, actor: { name: string; animal: string }): void {
+    const scored = res.scored ?? 0;
+    const streak = res.streak ?? 1;
+    const fields = res.fields ?? 1;
+    const who = `${actor.animal} ${actor.name}`;
+    const acresTxt = `${scored} acre${scored === 1 ? "" : "s"}`;
+    const fieldsTxt = fields >= 2 ? ` in ${fields} fields` : "";
+    const bonusTxt = (res.bonus ?? 0) > 0 ? ` +${res.bonus}🔥` : "";
+
+    let head = "";
+    let hot = false;
+    if (streak >= 4) (head = "ON FIRE! "), (hot = true);
+    else if (streak === 3) (head = "Triple! "), (hot = true);
+    else if (streak === 2) (head = "Double! "), (hot = true);
+    else if (res.mega) (head = "Mega field! "), (hot = true);
+
+    callout(`${head}${who} encloses ${acresTxt}${fieldsTxt}${bonusTxt}`, hot ? "streak" : "score");
+    if (hot) {
+      sfx.streak(streak);
+      if (streak >= 3 || res.mega) confetti(40);
+    }
+  }
+
+  private checkBagLow(): void {
+    const n = this.game.bag.length;
+    (this.root.querySelector(".bag") as HTMLElement | null)?.classList.toggle("low", n > 0 && n <= 6);
+    let tier: number | null = null;
+    if (n === 0) tier = 0;
+    else if (n <= 6) tier = 6;
+    else if (n <= 12) tier = 12;
+    if (tier === null || this.bagWarned.has(tier)) return;
+    this.bagWarned.add(tier);
+    const msg =
+      tier === 0
+        ? "🚜 Bag empty — final hands!"
+        : tier === 6
+          ? `⏳ Almost out — ${n} hedge${n === 1 ? "" : "s"} left`
+          : `🌱 Bag running low — ${n} hedges left`;
+    callout(msg, "low");
   }
 
   // ---- human input ----
@@ -230,7 +280,7 @@ export class GameUI {
       this.setStatus(`Illegal: ${res.reason}`);
       return;
     }
-    this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, actor);
+    this.afterCommit(res, actor);
     this.syncScene();
     this.beginTurn();
   }
@@ -369,19 +419,22 @@ export class GameUI {
   private renderHud(): void {
     const ps = this.root.querySelector(".players")!;
     ps.innerHTML = "";
-    const lead = Math.max(...this.game.players.map((p) => p.score));
+    const lead = Math.max(...this.game.players.map((p) => totalScore(p)));
     this.game.players.forEach((p) => {
+      const total = totalScore(p);
       const chip = document.createElement("div");
       const active = p.id === this.game.current && !this.game.gameOver;
-      chip.className = "pchip" + (active ? " active" : "") + (p.score === lead && lead > 0 ? " lead" : "");
+      chip.className = "pchip" + (active ? " active" : "") + (total === lead && lead > 0 ? " lead" : "");
       chip.style.setProperty("--pc", p.colour);
+      const bonusTag = p.bonus > 0 ? `<span class="pbonus" title="${p.score} acres + ${p.bonus} streak">+${p.bonus}🔥</span>` : "";
       chip.innerHTML =
         `<span class="panimal">${p.animal}</span>` +
         `<span class="pname">${p.name}</span>` +
-        `<span class="pscore">${p.score}<small>🌿</small></span>`;
+        `<span class="pscore">${total}<small>🌿</small></span>` +
+        bonusTag;
       ps.appendChild(chip);
       // pop the score when it just increased
-      if (this.prevScores[p.id] !== undefined && p.score > this.prevScores[p.id]) {
+      if (this.prevScores[p.id] !== undefined && total > this.prevScores[p.id]) {
         gsap.fromTo(
           chip.querySelector(".pscore"),
           { scale: 1.8, color: "#ffd34d" },
@@ -389,8 +442,11 @@ export class GameUI {
         );
       }
     });
-    this.prevScores = this.game.players.map((p) => p.score);
-    this.root.querySelector(".bag")!.textContent = `🌱 ${this.game.bag.length} in bag`;
+    this.prevScores = this.game.players.map((p) => totalScore(p));
+    const n = this.game.bag.length;
+    const bag = this.root.querySelector(".bag") as HTMLElement;
+    bag.textContent = `🌱 ${n} in bag`;
+    bag.classList.toggle("low", n > 0 && n <= 6);
   }
 
   private updateButtons(): void {
@@ -478,10 +534,55 @@ export class GameUI {
     });
   }
 
+  /** Read-only peek at the shared bag — draws stay random, this is just info. */
+  private showBag(): void {
+    const bag = this.game.bag;
+    const empty = bag.length === 0;
+    const tally: Partial<Record<Colour, number>> = {};
+    for (const t of bag) for (const c of t.segments) tally[c] = (tally[c] ?? 0) + 1;
+    const seg = (c: Colour) =>
+      `<span style="background:${COLOUR_HEX[c]};box-shadow:inset 0 0 0 2px ${COLOUR_HEX_DARK[c]}"></span>`;
+    const tallyHtml = COLOURS.map(
+      (c) =>
+        `<span class="bag-tally"><i style="background:${COLOUR_HEX[c]};box-shadow:inset 0 0 0 2px ${COLOUR_HEX_DARK[c]}"></i>${COLOUR_NAME[c]} ×${tally[c] ?? 0}</span>`,
+    ).join("");
+    const sorted = [...bag].sort((a, b) => a.segments.join("").localeCompare(b.segments.join("")));
+    const tilesHtml = sorted
+      .map((t) => `<div class="bagtile">${t.segments.map(seg).join("")}</div>`)
+      .join("");
+
+    const back = document.createElement("div");
+    back.className = "modal-back";
+    back.innerHTML = `
+      <div class="modal bag-modal">
+        <h2>🌱 ${bag.length} hedge${bag.length === 1 ? "" : "s"} left</h2>
+        <p>${
+          empty
+            ? "The bag is empty — everyone's playing out their final hands."
+            : "Draws are random — you can't pick from the bag — but here's everything still out there."
+        }</p>
+        ${empty ? "" : `<div class="bag-tallies">${tallyHtml}</div><div class="bagtiles">${tilesHtml}</div>`}
+        <div class="end-btns"><button class="btn primary" id="bag-close">Got it</button></div>
+      </div>`;
+    this.root.appendChild(back);
+    const close = () => back.remove();
+    back.querySelector("#bag-close")!.addEventListener("click", close);
+    back.addEventListener("click", (e) => {
+      if (e.target === back) close();
+    });
+    gsap.from(back.querySelectorAll(".bagtile"), {
+      scale: 0.4,
+      opacity: 0,
+      duration: 0.3,
+      ease: "back.out(2)",
+      stagger: 0.01,
+    });
+  }
+
   private showEnd(): void {
     const standings = this.game.standings();
     const winner = standings[0];
-    const tie = standings.filter((p) => p.score === winner.score).length > 1;
+    const tie = standings.filter((p) => totalScore(p) === totalScore(winner)).length > 1;
     const winLine = tie ? "It's a tie!" : winner.name === "You" ? "You win!" : `${winner.name} wins!`;
     confetti();
     sfx.win();
@@ -492,10 +593,10 @@ export class GameUI {
         <div class="trophy">${tie ? "🤝" : "🏆"}</div>
         <h2>${winLine}</h2>
         <table>${standings
-          .map(
-            (p, i) =>
-              `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${p.animal} ${p.name}</td><td>${p.score} acre${p.score === 1 ? "" : "s"}</td></tr>`,
-          )
+          .map((p, i) => {
+            const bonusNote = p.bonus > 0 ? `<small> (${p.score} + ${p.bonus}🔥)</small>` : "";
+            return `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${p.animal} ${p.name}</td><td>${totalScore(p)} acre${totalScore(p) === 1 ? "" : "s"}${bonusNote}</td></tr>`;
+          })
           .join("")}</table>
         <div class="end-btns">
           <button class="btn" id="end-inspect">Inspect board</button>
@@ -524,7 +625,7 @@ export class GameUI {
     }
     const actor = { name: this.game.currentPlayer.name, animal: this.game.currentPlayer.animal, colour: this.game.currentPlayer.colour };
     const res = this.game.commit(moves[0]);
-    this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, actor);
+    this.afterCommit(res, actor);
     this.syncScene();
     this.beginTurn();
     return true;
@@ -556,7 +657,7 @@ const TEMPLATE = `
     <header class="hud">
       <div class="brand">Hedge<span>ways</span></div>
       <div class="players"></div>
-      <div class="bag"></div>
+      <button id="btn-bag" class="bag" title="See what's left in the bag"></button>
       <button id="btn-fit" class="icon" title="Recenter board">⤢</button>
       <button id="btn-sound" class="icon" title="Sound">🔊</button>
       <button id="btn-help" class="icon" title="How to play">?</button>
