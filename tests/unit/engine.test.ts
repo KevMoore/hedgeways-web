@@ -98,6 +98,31 @@ describe("placement (Qwirkle-strict)", () => {
     expect(validateMove(b, dup).ok).toBe(false);
   });
 
+  it("allows different colours where tiles only touch at a corner (diagonal)", () => {
+    const b = new Board();
+    b.cells.set(key(5, 0), { colour: "G", tileId: 1 }); // orthogonal link (must match)
+    b.cells.set(key(6, 4), { colour: "Y", tileId: 2 }); // only corner-touches the new tile
+    // new vertical tile G/P/P at (5,1),(5,2),(5,3): (5,1) edge-matches the G above,
+    // (5,3)=P only diagonally touches the Y at (6,4) -> allowed
+    const move: PlacedTile[] = [{ tileId: 3, cells: orient(tile(3, "GPP"), 5, 1, "V", false) }];
+    expect(validateMove(b, move).ok).toBe(true);
+    // but a colour mismatch on the orthogonal (edge) contact is still illegal
+    const bad: PlacedTile[] = [{ tileId: 4, cells: orient(tile(4, "YPP"), 5, 1, "V", false) }];
+    expect(validateMove(b, bad).ok).toBe(false);
+  });
+
+  it("does not enclose a field whose walls only meet at corners", () => {
+    const b = new Board();
+    // a diagonal 'staircase' of hedges around (1,1): they touch only at corners,
+    // leaving orthogonal gaps, so the interior is not sealed
+    for (const [x, y] of [
+      [1, 0], [0, 1], // top + left meet (1,1) only via these two ortho cells...
+      [2, 2], [1, 2], // ...but the bottom/right are offset so gaps remain
+    ] as [number, number][])
+      b.cells.set(key(x, y), { colour: "G", tileId: 0 });
+    expect(findEnclosed(b).size).toBe(0);
+  });
+
   it("rejects a tile not linked to anything", () => {
     const b = new Board();
     const t1 = tile(1, "GYB");

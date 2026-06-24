@@ -27,12 +27,14 @@ body {
 
 /* ---------- start screen ---------- */
 .start {
+  position: relative;
+  z-index: 1;
   max-width: 520px;
   margin: 0 auto;
-  padding: 6vh 20px 20px;
+  padding: 6vh 20px 24px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   align-items: center;
   text-align: center;
 }
@@ -43,6 +45,14 @@ body {
   color: var(--frame);
   letter-spacing: -1px;
 }
+.logo {
+  animation: logo-float 4s ease-in-out infinite;
+}
+@keyframes logo-float {
+  50% {
+    transform: translateY(-6px);
+  }
+}
 .logo span,
 .brand span {
   color: var(--green);
@@ -50,6 +60,63 @@ body {
 .tag {
   color: #4a5a4a;
   margin: 0;
+}
+
+/* ambient drifting leaves behind the menu */
+.field {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.field i {
+  position: absolute;
+  bottom: -10vh;
+  left: calc((var(--i) + 0.5) * 11%);
+  font-size: clamp(22px, 5vw, 40px);
+  opacity: 0.14;
+  animation: drift 16s linear infinite;
+  animation-delay: calc(var(--i) * -1.9s);
+}
+@keyframes drift {
+  0% {
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    transform: translateY(-120vh) rotate(220deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .field i,
+  .logo,
+  .hedge-row span,
+  .btn.primary {
+    animation: none;
+  }
+}
+
+/* decorative livestock row under the logo */
+.hedge-row {
+  display: flex;
+  gap: 10px;
+}
+.hedge-row span {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--c) 22%, #fff);
+  box-shadow: 0 0 0 2px var(--c) inset;
+  animation: sway 3s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.25s);
+}
+@keyframes sway {
+  50% {
+    transform: translateY(-5px) rotate(-4deg);
+  }
 }
 .setup {
   width: 100%;
@@ -152,10 +219,34 @@ body {
   font-weight: 700;
   cursor: pointer;
   min-height: 44px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+@media (hover: hover) {
+  .btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 0 rgba(31, 61, 43, 0.18);
+  }
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+  box-shadow: none;
 }
 .btn.primary {
   background: var(--green);
   color: #fff;
+}
+.start .btn.primary,
+.btn.primary.ready {
+  animation: cta-pulse 2s ease-in-out infinite;
+}
+@keyframes cta-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(108, 194, 74, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(108, 194, 74, 0);
+  }
 }
 .btn:disabled {
   opacity: 0.4;
@@ -214,8 +305,17 @@ body {
 .pchip.active {
   background: var(--green);
   color: #fff;
-  box-shadow: 0 0 0 2px #fff inset;
   transform: translateY(-1px);
+  animation: chip-pulse 1.8s ease-in-out infinite;
+}
+@keyframes chip-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px #fff inset, 0 0 0 0 rgba(255, 255, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 2px #fff inset, 0 0 0 6px rgba(255, 255, 255, 0);
+  }
 }
 .pchip.lead .pscore {
   color: #ffd34d;
@@ -285,7 +385,16 @@ body {
 }
 .tile.sel {
   outline: 3px solid var(--yellow);
-  transform: translateY(-4px);
+  animation: tile-bob 0.9s ease-in-out infinite;
+}
+@keyframes tile-bob {
+  0%,
+  100% {
+    transform: translateY(-4px);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
 }
 .tile.used {
   opacity: 0.3;

@@ -6,6 +6,7 @@ import { generateMoves } from "../game/moves";
 import { validateMove } from "../game/placement";
 import type { Cell, Colour, Move, Orientation, PlacedTile, Tile } from "../game/types";
 import { key } from "../game/types";
+import gsap from "gsap";
 import { sfx } from "../audio";
 import { Scene } from "../render/scene";
 import { callout, confetti } from "./effects";
@@ -92,7 +93,7 @@ export class GameUI {
     }
     // human
     const hasMove = this.game.hasLegalMove();
-    this.renderHand(false);
+    this.renderHand(false, true);
     this.setStatus(
       hasMove
         ? `Your turn — pick a hedge, then choose a highlighted square`
@@ -334,7 +335,7 @@ export class GameUI {
     return this.game.currentPlayer.hand.find((t) => t.id === id);
   }
 
-  private renderHand(hidden: boolean): void {
+  private renderHand(hidden: boolean, animate = false): void {
     const el = this.root.querySelector(".hand")!;
     el.innerHTML = "";
     const p = this.game.currentPlayer;
@@ -356,7 +357,11 @@ export class GameUI {
       d.addEventListener("click", () => this.selectTile(tile.id));
       el.appendChild(d);
     }
+    if (animate)
+      gsap.from([...el.children], { y: 14, opacity: 0, duration: 0.32, ease: "back.out(2)", stagger: 0.05 });
   }
+
+  private prevScores: number[] = [];
 
   private renderHud(): void {
     const ps = this.root.querySelector(".players")!;
@@ -371,7 +376,16 @@ export class GameUI {
         `<span class="pname">${active ? "▶ " : ""}${p.animal} ${p.name}</span>` +
         `<span class="pscore">${p.score}<small>🌿</small></span>`;
       ps.appendChild(chip);
+      // pop the score when it just increased
+      if (this.prevScores[p.id] !== undefined && p.score > this.prevScores[p.id]) {
+        gsap.fromTo(
+          chip.querySelector(".pscore"),
+          { scale: 1.8, color: "#ffd34d" },
+          { scale: 1, color: "", duration: 0.6, ease: "back.out(3)" },
+        );
+      }
     });
+    this.prevScores = this.game.players.map((p) => p.score);
     this.root.querySelector(".bag")!.textContent = `🌱 ${this.game.bag.length} in bag`;
   }
 
@@ -382,6 +396,10 @@ export class GameUI {
     btn(this.root, "#btn-undo", human && this.pending.length > 0);
     btn(this.root, "#btn-confirm", human && this.pending.length > 0);
     btn(this.root, "#btn-pass", human && !hasMove && this.pending.length === 0);
+    (this.root.querySelector("#btn-confirm") as HTMLElement).classList.toggle(
+      "ready",
+      human && this.pending.length > 0,
+    );
   }
 
   private setStatus(msg: string): void {

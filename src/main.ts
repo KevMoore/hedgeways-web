@@ -1,4 +1,5 @@
 import "./style.css";
+import gsap from "gsap";
 import { GameUI } from "./ui/game-ui";
 import { showHowTo } from "./ui/howto";
 import type { Difficulty } from "./game/types";
@@ -39,8 +40,10 @@ function renderStart(): void {
   const saved = loadActive();
   const resumable = saved && !saved.gameOver ? saved : null;
   app.innerHTML = `
+    <div class="field" aria-hidden="true">${Array.from({ length: 9 }, (_, i) => `<i style="--i:${i}">${["🌿", "🍃", "🌱"][i % 3]}</i>`).join("")}</div>
     <div class="start">
       <div class="logo">Hedge<span>ways</span></div>
+      <div class="hedge-row" aria-hidden="true">${PLAYER_KITS.map((k, i) => `<span style="--c:${k.colour};--i:${i}">${k.animal}</span>`).join("")}</div>
       <p class="tag">Lay hedges, enclose fields, claim the most acres of land.</p>
       ${
         resumable
@@ -150,6 +153,10 @@ function renderStart(): void {
     });
     startGame({ players, seed: (Math.random() * 0xffffffff) >>> 0 });
   });
+
+  // staggered entrance
+  gsap.from(".start > *", { y: 16, opacity: 0, duration: 0.5, ease: "back.out(1.6)", stagger: 0.07 });
+  gsap.from(".hedge-row span", { scale: 0, opacity: 0, duration: 0.5, ease: "back.out(2.5)", stagger: 0.08, delay: 0.15 });
 }
 
 // expose a pre-game hook for e2e

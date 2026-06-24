@@ -33,8 +33,11 @@ export class Scene {
   private acrePops: { x: number; y: number; n: number; t0: number; animal: string }[] = [];
 
   private scale = 56;
-  private camX = 0; // world coords at canvas centre
+  private camX = 0; // world coords at canvas centre (rendered)
   private camY = 0;
+  private tScale = 56; // camera targets (eased toward each frame)
+  private tCamX = 0;
+  private tCamY = 0;
   private userMoved = false;
   private needsDraw = true;
 
@@ -53,10 +56,30 @@ export class Scene {
     window.addEventListener("resize", this.onResize);
     const loop = () => {
       if (!this.alive) return;
-      if (this.needsDraw || this.flash.size || this.acrePops.length || this.animating()) this.draw();
+      const moving = this.stepCamera();
+      if (moving || this.needsDraw || this.flash.size || this.acrePops.length || this.animating())
+        this.draw();
       this.rafId = requestAnimationFrame(loop);
     };
     this.rafId = requestAnimationFrame(loop);
+  }
+
+  /** Ease the rendered camera toward its target. Returns true while still moving. */
+  private stepCamera(): boolean {
+    const e = 0.22;
+    const dx = this.tCamX - this.camX;
+    const dy = this.tCamY - this.camY;
+    const ds = this.tScale - this.scale;
+    if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3 && Math.abs(ds) < 0.04) {
+      this.camX = this.tCamX;
+      this.camY = this.tCamY;
+      this.scale = this.tScale;
+      return false;
+    }
+    this.camX += dx * e;
+    this.camY += dy * e;
+    this.scale += ds * e;
+    return true;
   }
 
   /** Stop the render loop and detach listeners (call when the game is torn down). */
@@ -86,7 +109,9 @@ export class Scene {
     this.acres.clear();
     this.acrePops = [];
     this.userMoved = false;
-    this.scale = 56;
+    this.scale = this.tScale = 56;
+    this.camX = this.tCamX = 0.5;
+    this.camY = this.tCamY = 0.5;
     this.needsDraw = true;
   }
 
@@ -180,10 +205,11 @@ export class Scene {
   }
 
   fitBoard(): void {
+    // writes camera TARGETS; the render loop eases the rendered camera toward them
     if (this.cells.size === 0) {
-      this.camX = 0.5;
-      this.camY = 0.5;
-      this.scale = 56;
+      this.tCamX = 0.5;
+      this.tCamY = 0.5;
+      this.tScale = 56;
       this.needsDraw = true;
       return;
     }
@@ -195,9 +221,9 @@ export class Scene {
     const vh = this.canvas.height / this.dpr;
     const sx = vw / (wCells + pad * 2);
     const sy = vh / (hCells + pad * 2);
-    this.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, Math.min(sx, sy)));
-    this.camX = (minX + maxX + 1) / 2;
-    this.camY = (minY + maxY + 1) / 2;
+    this.tScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, Math.min(sx, sy)));
+    this.tCamX = (minX + maxX + 1) / 2;
+    this.tCamY = (minY + maxY + 1) / 2;
     this.needsDraw = true;
   }
 
@@ -280,6 +306,8 @@ export class Scene {
       }
       this.camX -= (e.clientX - lastX) / this.scale;
       this.camY -= (e.clientY - lastY) / this.scale;
+      this.tCamX = this.camX; // keep target synced so easing doesn't fight the drag
+      this.tCamY = this.camY;
       lastX = e.clientX;
       lastY = e.clientY;
       this.needsDraw = true;
@@ -313,6 +341,7 @@ export class Scene {
 
   private zoomBy(f: number): void {
     this.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.scale * f));
+    this.tScale = this.scale; // immediate for user zoom
     this.needsDraw = true;
   }
 
