@@ -4,6 +4,7 @@ import { showHowTo } from "./ui/howto";
 import type { Difficulty } from "./game/types";
 import type { GameConfig, GameSnapshot } from "./game/game";
 import { describeSave, loadActive } from "./game/persistence";
+import { PLAYER_KITS } from "./game/constants";
 
 const app = document.getElementById("app")!;
 let ui: GameUI | null = null;
@@ -53,6 +54,14 @@ function renderStart(): void {
           </div>
         </label>
         <div id="slots" class="slots"></div>
+        <label class="count-row">Your livestock
+          <div class="animals" id="animals">
+            ${PLAYER_KITS.map(
+              (k, i) =>
+                `<button data-a="${i}" style="--pc:${k.colour}">${k.animal}</button>`,
+            ).join("")}
+          </div>
+        </label>
       </div>
       <div class="start-btns">
         <button class="btn" id="how">How to play</button>
@@ -106,6 +115,16 @@ function renderStart(): void {
     });
   });
 
+  let humanKit = 0;
+  const animalBtns = app.querySelectorAll<HTMLButtonElement>("#animals button");
+  animalBtns.forEach((b) => {
+    b.classList.toggle("on", Number(b.dataset.a) === humanKit);
+    b.addEventListener("click", () => {
+      humanKit = Number(b.dataset.a);
+      animalBtns.forEach((x) => x.classList.toggle("on", x === b));
+    });
+  });
+
   if (resumable) {
     app.querySelector("#resume")!.addEventListener("click", () => {
       startGame(resumable.config, resumable);
@@ -114,11 +133,21 @@ function renderStart(): void {
 
   app.querySelector("#how")!.addEventListener("click", () => showHowTo());
   app.querySelector("#play")!.addEventListener("click", () => {
-    const players = slots.slice(0, count).map((s, i) => ({
-      name: s.type === "human" ? "You" : `Bot ${i + 1}`,
-      isBot: s.type === "bot",
-      difficulty: s.diff,
-    }));
+    // assign livestock kits: the first human gets their chosen one, others fill the rest
+    const firstHuman = slots.slice(0, count).findIndex((s) => s.type === "human");
+    const free = [0, 1, 2, 3].filter((k) => firstHuman < 0 || k !== humanKit);
+    let ptr = 0;
+    const players = slots.slice(0, count).map((s, i) => {
+      const kitIdx = i === firstHuman ? humanKit : free[ptr++];
+      const kit = PLAYER_KITS[kitIdx];
+      return {
+        name: s.type === "human" ? "You" : `Bot ${i + 1}`,
+        isBot: s.type === "bot",
+        difficulty: s.diff,
+        colour: kit.colour,
+        animal: kit.animal,
+      };
+    });
     startGame({ players, seed: (Math.random() * 0xffffffff) >>> 0 });
   });
 }

@@ -1,6 +1,6 @@
 import { Board } from "./board";
 import { buildBag } from "./bag";
-import { HAND_SIZE } from "./constants";
+import { HAND_SIZE, PLAYER_KITS } from "./constants";
 import { applyMoveToBoard, generateMoves } from "./moves";
 import { validateMove } from "./placement";
 import { findEnclosed } from "./scoring";
@@ -11,6 +11,7 @@ export interface GameSnapshot {
   config: GameConfig;
   cells: [string, Cell][];
   enclosed: string[];
+  acreOwner: [string, number][];
   bag: Tile[];
   players: Player[];
   current: number;
@@ -24,6 +25,8 @@ export interface PlayerConfig {
   name: string;
   isBot: boolean;
   difficulty?: Difficulty;
+  colour?: string;
+  animal?: string;
 }
 
 export interface GameConfig {
@@ -60,6 +63,7 @@ export class Game {
   private load(s: GameSnapshot): void {
     this.board.cells = new Map(s.cells.map(([k, c]) => [k, { ...c }]));
     this.board.enclosed = new Set(s.enclosed);
+    this.board.acreOwner = new Map(s.acreOwner ?? []);
     this.bag = s.bag.map((t) => ({ id: t.id, segments: [...t.segments] }));
     this.players = s.players.map((p) => ({ ...p, hand: p.hand.map((t) => ({ id: t.id, segments: [...t.segments] })) }));
     this.current = s.current;
@@ -76,6 +80,7 @@ export class Game {
       config: { players: this.config.players.map((p) => ({ ...p })), seed: this.config.seed },
       cells: [...this.board.cells.entries()].map(([k, c]) => [k, { ...c }]),
       enclosed: [...this.board.enclosed],
+      acreOwner: [...this.board.acreOwner],
       bag: this.bag.map(tile),
       players: this.players.map((p) => ({ ...p, hand: p.hand.map(tile) })),
       current: this.current,
@@ -95,6 +100,8 @@ export class Game {
       difficulty: p.difficulty ?? "medium",
       hand: this.bag.splice(0, HAND_SIZE),
       score: 0,
+      colour: p.colour ?? PLAYER_KITS[id % PLAYER_KITS.length].colour,
+      animal: p.animal ?? PLAYER_KITS[id % PLAYER_KITS.length].animal,
     }));
   }
 
@@ -126,10 +133,14 @@ export class Game {
     const usedIds = new Set(move.tiles.map((t) => t.tileId));
     player.hand = player.hand.filter((t) => !usedIds.has(t.id));
 
-    // score newly enclosed acres
+    // score newly enclosed acres + claim them for this farmer (animal/colour)
     const enclosedNow = findEnclosed(this.board);
     const newly: string[] = [];
-    for (const k of enclosedNow) if (!this.board.enclosed.has(k)) newly.push(k);
+    for (const k of enclosedNow)
+      if (!this.board.enclosed.has(k)) {
+        newly.push(k);
+        this.board.acreOwner.set(k, player.id);
+      }
     this.board.enclosed = enclosedNow;
     player.score += newly.length;
 

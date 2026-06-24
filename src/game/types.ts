@@ -42,6 +42,8 @@ export interface Player {
   difficulty: Difficulty;
   hand: Tile[];
   score: number;
+  colour: string; // player colour (fills their claimed acres)
+  animal: string; // livestock emoji stamped on their acres
 }
 
 export const key = (x: number, y: number): string => `${x},${y}`;

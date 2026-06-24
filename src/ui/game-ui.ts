@@ -106,23 +106,23 @@ export class GameUI {
     if (!this.alive || this.game.gameOver || !this.game.currentPlayer.isBot) return;
     const move = chooseAiMove(this.game);
     if (!this.alive) return; // torn down while the (synchronous) search ran
-    const name = this.game.currentPlayer.name;
+    const actor = this.game.currentPlayer;
     if (!move) {
       this.game.pass();
-      callout(`${name} passes`, "pass");
+      callout(`${actor.animal} ${actor.name} passes`, "pass");
     } else {
       const res = this.game.commit(move);
-      this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, name);
+      this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, actor);
     }
     this.syncScene();
     this.beginTurn();
   }
 
-  private afterCommit(newly: string[], scored: number, name: string): void {
+  private afterCommit(newly: string[], scored: number, actor: { name: string; animal: string }): void {
     if (scored > 0) {
-      this.scene.flashEnclosed(newly);
+      this.scene.flashEnclosed(newly, actor.animal);
       sfx.score(scored);
-      callout(`${name} encloses ${scored} acre${scored === 1 ? "" : "s"}!`, "score");
+      callout(`${actor.animal} ${actor.name} encloses ${scored} acre${scored === 1 ? "" : "s"}!`, "score");
     } else {
       sfx.place();
     }
@@ -222,12 +222,13 @@ export class GameUI {
   private confirm(): void {
     if (this.pending.length === 0) return;
     const move: Move = { tiles: this.pending.map((t) => ({ tileId: t.tileId, cells: t.cells })) };
+    const actor = { name: "You", animal: this.game.currentPlayer.animal };
     const res = this.game.commit(move);
     if (!res.ok) {
       this.setStatus(`Illegal: ${res.reason}`);
       return;
     }
-    this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, "You");
+    this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, actor);
     this.syncScene();
     this.beginTurn();
   }
@@ -314,7 +315,17 @@ export class GameUI {
   }
 
   private syncScene(): void {
-    this.scene.syncBoard(this.workingCells(), this.game.board.enclosed);
+    this.scene.syncBoard(this.workingCells(), this.game.board.enclosed, this.acresMap());
+  }
+
+  /** enclosed cell -> the owning farmer's colour + animal, for the renderer */
+  private acresMap(): Map<string, { colour: string; animal: string }> {
+    const m = new Map<string, { colour: string; animal: string }>();
+    for (const [k, pid] of this.game.board.acreOwner) {
+      const p = this.game.players[pid];
+      if (p) m.set(k, { colour: p.colour, animal: p.animal });
+    }
+    return m;
   }
 
   private handTile(id: number): Tile | undefined {
@@ -353,8 +364,9 @@ export class GameUI {
       const chip = document.createElement("div");
       const active = p.id === this.game.current && !this.game.gameOver;
       chip.className = "pchip" + (active ? " active" : "") + (p.score === lead && lead > 0 ? " lead" : "");
+      chip.style.setProperty("--pc", p.colour);
       chip.innerHTML =
-        `<span class="pname">${active ? "▶ " : ""}${p.name}</span>` +
+        `<span class="pname">${active ? "▶ " : ""}${p.animal} ${p.name}</span>` +
         `<span class="pscore">${p.score}<small>🌿</small></span>`;
       ps.appendChild(chip);
     });
@@ -458,7 +470,7 @@ export class GameUI {
         <table>${standings
           .map(
             (p, i) =>
-              `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${p.name}</td><td>${p.score} acre${p.score === 1 ? "" : "s"}</td></tr>`,
+              `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${p.animal} ${p.name}</td><td>${p.score} acre${p.score === 1 ? "" : "s"}</td></tr>`,
           )
           .join("")}</table>
         <div class="end-btns">
@@ -486,8 +498,9 @@ export class GameUI {
       this.beginTurn();
       return false;
     }
+    const actor = { name: this.game.currentPlayer.name, animal: this.game.currentPlayer.animal };
     const res = this.game.commit(moves[0]);
-    this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, this.game.currentPlayer.name);
+    this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, actor);
     this.syncScene();
     this.beginTurn();
     return true;

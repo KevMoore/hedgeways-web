@@ -5,6 +5,8 @@ export class Board {
   cells = new Map<string, Cell>();
   /** Empty cells known to be inside an enclosed field (locked: no hedges allowed). */
   enclosed = new Set<string>();
+  /** Enclosed cell -> id of the farmer who claimed it (for animal/colour fill). */
+  acreOwner = new Map<string, number>();
 
   get(x: number, y: number): Cell | undefined {
     return this.cells.get(key(x, y));
@@ -41,6 +43,7 @@ export class Board {
     const b = new Board();
     b.cells = new Map(this.cells);
     b.enclosed = new Set(this.enclosed);
+    b.acreOwner = new Map(this.acreOwner);
     return b;
   }
 }

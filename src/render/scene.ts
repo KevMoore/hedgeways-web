@@ -7,6 +7,7 @@ import {
   FRAME_HEX,
 } from "../game/constants";
 import type { Cell, Colour, PlacedCell } from "../game/types";
+import { key } from "../game/types";
 
 interface Ghost {
   cells: PlacedCell[];
@@ -27,7 +28,8 @@ export class Scene {
   private highlights = new Set<string>();
   private flash = new Map<string, number>(); // cell -> start time
   private placedAt = new Map<string, number>(); // cell -> placement time (pop-in anim)
-  private acrePops: { x: number; y: number; n: number; t0: number }[] = [];
+  private acres = new Map<string, { colour: string; animal: string }>(); // enclosed cell -> owner style
+  private acrePops: { x: number; y: number; n: number; t0: number; animal: string }[] = [];
 
   private scale = 56;
   private camX = 0; // world coords at canvas centre
@@ -80,13 +82,18 @@ export class Scene {
     this.highlights.clear();
     this.flash.clear();
     this.placedAt.clear();
+    this.acres.clear();
     this.acrePops = [];
     this.userMoved = false;
     this.scale = 56;
     this.needsDraw = true;
   }
 
-  syncBoard(cells: Map<string, Cell>, enclosed: Set<string>): void {
+  syncBoard(
+    cells: Map<string, Cell>,
+    enclosed: Set<string>,
+    acres?: Map<string, { colour: string; animal: string }>,
+  ): void {
     // stamp cells that are newly on the board so they pop in
     const now = performance.now();
     for (const k of cells.keys()) if (!this.cells.has(k) && !this.placedAt.has(k)) this.placedAt.set(k, now);
@@ -94,6 +101,7 @@ export class Scene {
     for (const k of [...this.placedAt.keys()]) if (!cells.has(k)) this.placedAt.delete(k);
     this.cells = new Map(cells);
     this.enclosed = new Set(enclosed);
+    if (acres) this.acres = new Map(acres);
     if (!this.userMoved) this.fitBoard();
     else this.ensureVisible();
     this.needsDraw = true;
@@ -146,7 +154,7 @@ export class Scene {
     this.needsDraw = true;
   }
 
-  flashEnclosed(cells: Iterable<string>): void {
+  flashEnclosed(cells: Iterable<string>, animal = ""): void {
     const now = performance.now();
     let sx = 0;
     let sy = 0;
@@ -158,7 +166,7 @@ export class Scene {
       sy += y;
       n++;
     }
-    if (n > 0) this.acrePops.push({ x: sx / n + 0.5, y: sy / n + 0.5, n, t0: now });
+    if (n > 0) this.acrePops.push({ x: sx / n + 0.5, y: sy / n + 0.5, n, t0: now, animal });
     this.needsDraw = true;
   }
 
@@ -377,7 +385,7 @@ export class Scene {
       ctx.font = `800 ${Math.max(16, this.scale * 0.42)}px "Trebuchet MS", sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      const label = `+${p.n} acre${p.n === 1 ? "" : "s"}`;
+      const label = `${p.animal ? p.animal + " " : ""}+${p.n} acre${p.n === 1 ? "" : "s"}`;
       ctx.lineWidth = 4;
       ctx.strokeStyle = "rgba(20,40,24,0.9)";
       ctx.strokeText(label, 0, 0);
@@ -413,10 +421,15 @@ export class Scene {
     const ctx = this.ctx;
     const [px, py] = this.worldToScreen(x, y);
     const s = this.scale;
+    const owner = this.acres.get(key(x, y));
     ctx.fillStyle = ACRE_HEX;
     ctx.fillRect(px, py, s, s);
+    if (owner) {
+      ctx.fillStyle = hexA(owner.colour, 0.3); // tint the claimed land in the farmer's colour
+      ctx.fillRect(px, py, s, s);
+    }
     // faint furrows so enclosed land reads as a tended field
-    ctx.strokeStyle = "rgba(120,160,80,0.25)";
+    ctx.strokeStyle = "rgba(120,160,80,0.22)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let i = 1; i < 4; i++) {
@@ -424,6 +437,12 @@ export class Scene {
       ctx.lineTo(px + s - 2, py + (s * i) / 4);
     }
     ctx.stroke();
+    if (owner && s > 22) {
+      ctx.font = `${Math.round(s * 0.6)}px serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(owner.animal, px + s / 2, py + s / 2 + s * 0.04);
+    }
   }
   private drawAcreFlash(x: number, y: number, alpha: number): void {
     const ctx = this.ctx;
@@ -548,6 +567,12 @@ function foliage(
     const dist = rand() * radius * 0.6;
     leaf(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, radius * (0.45 + rand() * 0.3), rand() * Math.PI, fill, alpha);
   }
+}
+
+/** "#rrggbb" -> "rgba(r,g,b,a)" */
+function hexA(hex: string, a: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
 function hash(x: number, y: number): number {

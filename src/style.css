@@ -82,6 +82,25 @@ body {
   background: var(--green);
   color: #fff;
 }
+.animals {
+  display: flex;
+  gap: 6px;
+}
+.animals button {
+  width: 46px;
+  height: 46px;
+  border: 2px solid #b9c7b2;
+  background: #fff;
+  border-radius: 12px;
+  font-size: 24px;
+  cursor: pointer;
+  line-height: 1;
+}
+.animals button.on {
+  border-color: var(--pc);
+  box-shadow: 0 0 0 3px var(--pc) inset;
+  background: color-mix(in srgb, var(--pc) 14%, #fff);
+}
 .slots {
   display: flex;
   flex-direction: column;
@@ -190,6 +209,7 @@ body {
   align-items: center;
   font-size: 14px;
   transition: background 0.2s, transform 0.2s;
+  border-left: 4px solid var(--pc, transparent);
 }
 .pchip.active {
   background: var(--green);

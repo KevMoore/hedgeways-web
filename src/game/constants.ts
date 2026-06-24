@@ -3,6 +3,18 @@ import type { Colour } from "./types";
 export const HAND_SIZE = 4;
 export const MAX_LAY = 3; // tiles per turn
 
+/** Each farmer claims acres with their livestock + player colour. */
+export interface PlayerKit {
+  animal: string;
+  colour: string;
+}
+export const PLAYER_KITS: PlayerKit[] = [
+  { animal: "🐷", colour: "#e0524d" },
+  { animal: "🐮", colour: "#7b61ff" },
+  { animal: "🐑", colour: "#1f9e8f" },
+  { animal: "🐓", colour: "#e0852b" },
+];
+
 /** Vivid leaf colours matching the physical tiles (kept close to the company brand palette). */
 export const COLOUR_HEX: Record<Colour, string> = {
   G: "#6cc24a",
