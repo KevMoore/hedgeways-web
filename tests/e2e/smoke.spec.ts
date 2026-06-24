@@ -112,8 +112,8 @@ test.describe("Hedgeways smoke", () => {
   test("how-to modal opens and closes", async ({ page }) => {
     await page.goto("/");
     await page.locator("#how").click();
-    await expect(page.locator(".modal.howto")).toBeVisible();
-    await page.locator("#howto-close").click();
-    await expect(page.locator(".modal.howto")).toHaveCount(0);
+    await expect(page.locator(".ht-overlay")).toBeVisible();
+    await page.locator(".ht-close").click();
+    await expect(page.locator(".ht-overlay")).toHaveCount(0);
   });
 });

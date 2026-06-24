@@ -43,12 +43,24 @@ function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
 
 const DIFFS: Difficulty[] = ["easy", "medium", "hard", "expert"];
 
+// Farmyard ambience drifting up behind the menu — foliage + a little farm life.
+const AMBIENT = ["🌿", "🍃", "🌱", "🌾", "🌻", "🐝", "🍃", "🦋", "🌿", "🌾", "🌱", "🐝"];
+function ambientField(): string {
+  const items = AMBIENT.map((g, i) => {
+    const x = ((i + 0.5) * (100 / AMBIENT.length)).toFixed(1);
+    const sway = Math.round(Math.random() * 40 - 20);
+    const dur = (14 + Math.random() * 9).toFixed(1);
+    return `<i style="--i:${i};--x:${x}%;--sway:${sway}px;--dur:${dur}s">${g}</i>`;
+  });
+  return `<div class="field" aria-hidden="true">${items.join("")}</div>`;
+}
+
 function renderStart(): void {
   teardown();
   const saved = loadActive();
   const resumable = saved && !saved.gameOver ? saved : null;
   app.innerHTML = `
-    <div class="field" aria-hidden="true">${Array.from({ length: 9 }, (_, i) => `<i style="--i:${i}">${["🌿", "🍃", "🌱"][i % 3]}</i>`).join("")}</div>
+    ${ambientField()}
     <div class="start">
       <div class="logo">Hedge<span>ways</span></div>
       <div class="hedge-row" aria-hidden="true">${PLAYER_KITS.map((k, i) => `<span style="--c:${k.colour};--i:${i}" data-animal="${k.animal}"></span>`).join("")}</div>
