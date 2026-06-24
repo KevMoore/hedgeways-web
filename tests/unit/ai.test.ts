@@ -3,7 +3,45 @@ import { Game } from "../../src/game/game";
 import { chooseAiMove } from "../../src/game/ai";
 import { makeRng } from "../../src/game/rng";
 import { BAG_SIZE } from "../../src/game/bag";
-import type { Difficulty } from "../../src/game/types";
+import type { Colour, Difficulty } from "../../src/game/types";
+
+describe("scoring", () => {
+  it("the move that seals a big field scores all its acres to the closer", () => {
+    const g = new Game({ seed: 1, players: [{ name: "A", isBot: true }, { name: "B", isBot: true }] });
+    g.board.cells.clear();
+    const G: Colour = "G";
+    const wall = (x: number, y: number) => g.board.cells.set(`${x},${y}`, { colour: G, tileId: 0 });
+    // green ring around a 3x3 interior (9 acres), with a 3-cell gap in the top wall
+    for (let x = 0; x <= 4; x++) wall(x, 4); // bottom
+    wall(0, 0);
+    wall(4, 0); // top corners only -> gap at (1..3, 0)
+    for (let y = 1; y <= 3; y++) {
+      wall(0, y);
+      wall(4, y);
+    }
+    const me = g.current;
+    const before = g.players[me].score;
+    g.players[me].hand = [{ id: 999, segments: [G, G, G] }, ...g.players[me].hand.slice(1)];
+    const res = g.commit({
+      tiles: [
+        {
+          tileId: 999,
+          cells: [
+            { x: 1, y: 0, colour: G },
+            { x: 2, y: 0, colour: G },
+            { x: 3, y: 0, colour: G },
+          ],
+        },
+      ],
+    });
+    expect(res.ok).toBe(true);
+    expect(res.scored).toBe(9);
+    expect(g.players[me].score).toBe(before + 9);
+    let owned = 0;
+    for (const [, pid] of g.board.acreOwner) if (pid === me) owned++;
+    expect(owned).toBe(9);
+  });
+});
 
 describe("snapshot", () => {
   it("round-trips game state and keeps playing", () => {

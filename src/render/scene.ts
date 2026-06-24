@@ -19,6 +19,7 @@ const MAX_SCALE = 110;
 const TAP_SLOP = 12; // px of finger drift still treated as a tap (not a pan)
 const POP_MS = 320; // tile placement pop-in
 const ACRE_POP_MS = 1300; // floating "+N acres" lifetime
+const BURST_MS = 1100; // enclosure celebration spark lifetime
 
 export class Scene {
   private ctx: CanvasRenderingContext2D;
@@ -31,6 +32,7 @@ export class Scene {
   private placedAt = new Map<string, number>(); // cell -> placement time (pop-in anim)
   private acres = new Map<string, { colour: string; animal: string }>(); // enclosed cell -> owner style
   private acrePops: { x: number; y: number; n: number; t0: number; animal: string }[] = [];
+  private bursts: { x: number; y: number; vx: number; vy: number; t0: number; colour: string; emoji: string }[] = [];
 
   private scale = 56;
   private camX = 0; // world coords at canvas centre (rendered)
@@ -48,6 +50,9 @@ export class Scene {
   private rafId = 0;
   private alive = true;
   private onResize = () => this.resize();
+  private t = 0; // current frame time, for idle animations
+  private reduceMotion =
+    typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
@@ -57,7 +62,8 @@ export class Scene {
     const loop = () => {
       if (!this.alive) return;
       const moving = this.stepCamera();
-      if (moving || this.needsDraw || this.flash.size || this.acrePops.length || this.animating())
+      const idleAnimals = !this.reduceMotion && this.acres.size > 0;
+      if (moving || this.needsDraw || this.flash.size || this.acrePops.length || this.bursts.length || this.animating() || idleAnimals)
         this.draw();
       this.rafId = requestAnimationFrame(loop);
     };
@@ -108,6 +114,7 @@ export class Scene {
     this.placedAt.clear();
     this.acres.clear();
     this.acrePops = [];
+    this.bursts = [];
     this.userMoved = false;
     this.scale = this.tScale = 56;
     this.camX = this.tCamX = 0.5;
@@ -180,11 +187,16 @@ export class Scene {
     this.needsDraw = true;
   }
 
-  flashEnclosed(cells: Iterable<string>, animal = ""): void {
+  flashEnclosed(cells: Iterable<string>, animal = "", colour = "#ffd34d"): void {
     const now = performance.now();
     let sx = 0;
     let sy = 0;
     let n = 0;
+    let s = (hash(Math.round(now), n) >>> 0) || 1;
+    const rand = () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
     for (const k of cells) {
       this.flash.set(k, now);
       const [x, y] = k.split(",").map(Number);
@@ -192,7 +204,19 @@ export class Scene {
       sy += y;
       n++;
     }
-    if (n > 0) this.acrePops.push({ x: sx / n + 0.5, y: sy / n + 0.5, n, t0: now, animal });
+    if (n > 0) {
+      const cx = sx / n + 0.5;
+      const cy = sy / n + 0.5;
+      this.acrePops.push({ x: cx, y: cy, n, t0: now, animal });
+      // celebratory burst: coloured sparks + a couple of the farmer's animals
+      const sparks = Math.min(8 + n, 22);
+      for (let i = 0; i < sparks; i++) {
+        const ang = rand() * Math.PI * 2;
+        const spd = 0.04 + rand() * 0.07;
+        const emoji = animal && i % 6 === 0 ? animal : "";
+        this.bursts.push({ x: cx, y: cy, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd - 0.03, t0: now, colour, emoji });
+      }
+    }
     this.needsDraw = true;
   }
 
@@ -348,6 +372,14 @@ export class Scene {
   // ---- drawing ----
   private draw(): void {
     const ctx = this.ctx;
+    // self-heal: if the backing store no longer matches the CSS box (mobile URL-bar
+    // show/hide, late layout), the canvas gets stretched and cells look rectangular.
+    const cw = this.canvas.clientWidth;
+    const ch = this.canvas.clientHeight;
+    if (cw > 0 && ch > 0 && (Math.abs(this.canvas.width - cw * this.dpr) > 1 || Math.abs(this.canvas.height - ch * this.dpr) > 1)) {
+      this.resize();
+    }
+    this.t = performance.now();
     ctx.save();
     ctx.scale(this.dpr, this.dpr);
     const vw = this.canvas.width / this.dpr;
@@ -422,6 +454,30 @@ export class Scene {
       ctx.restore();
     }
 
+    // celebration bursts (sparks + animals flying out from a sealed field)
+    this.bursts = this.bursts.filter((b) => now - b.t0 < BURST_MS);
+    for (const b of this.bursts) {
+      const age = (now - b.t0) / BURST_MS;
+      const t = (now - b.t0) / 16;
+      const wx = b.x + b.vx * t;
+      const wy = b.y + b.vy * t + 0.0009 * t * t; // gravity
+      const [px, py] = this.worldToScreen(wx, wy);
+      ctx.globalAlpha = Math.max(0, 1 - age);
+      if (b.emoji) {
+        ctx.font = `${Math.max(14, this.scale * 0.5)}px serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(b.emoji, px, py);
+      } else {
+        ctx.fillStyle = b.colour;
+        const r = Math.max(2, this.scale * 0.08) * (1 - age * 0.5);
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+
     ctx.restore();
     this.needsDraw = false;
   }
@@ -466,10 +522,23 @@ export class Scene {
     }
     ctx.stroke();
     if (owner && s > 22) {
-      ctx.font = `${Math.round(s * 0.6)}px serif`;
+      // idle-animate the livestock: a gentle bob + occasional hop, out of sync per cell
+      const phase = (hash(x, y) & 1023) / 1023;
+      let bob = 0;
+      let squash = 1;
+      if (!this.reduceMotion) {
+        const cyc = this.t / 900 + phase * 6.28;
+        bob = -Math.abs(Math.sin(cyc)) * s * 0.12; // little hops
+        squash = 1 + Math.sin(cyc * 2) * 0.04;
+      }
+      ctx.font = `${Math.round(s * 0.58)}px serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(owner.animal, px + s / 2, py + s / 2 + s * 0.04);
+      ctx.save();
+      ctx.translate(px + s / 2, py + s / 2 + s * 0.04 + bob);
+      ctx.scale(1, squash);
+      ctx.fillText(owner.animal, 0, 0);
+      ctx.restore();
     }
   }
   private drawAcreFlash(x: number, y: number, alpha: number): void {
@@ -522,10 +591,10 @@ export class Scene {
     ctx.lineWidth = Math.max(1, s * 0.035);
     ctx.stroke();
 
-    // foliage
+    // foliage: a bold spiky colour splat (matches the painted physical tiles)
     const fill = danger ? "#ffffff" : COLOUR_HEX[colour];
     const dark = danger ? "#cfcfcf" : COLOUR_HEX_DARK[colour];
-    foliage(ctx, cx, cy, s * 0.42, seed, fill, dark, alpha);
+    splat(ctx, cx, cy, s * 0.4, seed, fill, dark);
 
     ctx.restore();
   }
@@ -554,8 +623,33 @@ function easeOutBack(p: number): number {
   return 1 + c3 * x * x * x + c1 * x * x;
 }
 
-/** A bushy cluster of small pointed leaves — reads as clipped hedge foliage. */
-function foliage(
+/** Build a spiky, irregular "paint splat" path (alternating long/short spikes). */
+function splatPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number, seed: number) {
+  let s = seed >>> 0;
+  const rand = () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+  const spikes = 11;
+  ctx.beginPath();
+  for (let i = 0; i < spikes; i++) {
+    const ang = (i / spikes) * Math.PI * 2 + rand() * 0.18;
+    const outer = radius * (0.92 + rand() * 0.18);
+    const inner = radius * (0.46 + rand() * 0.14);
+    const ox = cx + Math.cos(ang) * outer;
+    const oy = cy + Math.sin(ang) * outer;
+    const midAng = ang + Math.PI / spikes;
+    const ix = cx + Math.cos(midAng) * inner;
+    const iy = cy + Math.sin(midAng) * inner;
+    if (i === 0) ctx.moveTo(ox, oy);
+    else ctx.lineTo(ox, oy);
+    ctx.lineTo(ix, iy);
+  }
+  ctx.closePath();
+}
+
+/** One bold spiky colour splat per hedge segment, like the hand-painted tiles. */
+function splat(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
@@ -563,38 +657,20 @@ function foliage(
   seed: number,
   fill: string,
   dark: string,
-  alpha: number,
 ) {
-  let s = seed >>> 0;
-  const rand = () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 4294967296;
-  };
-  const leaf = (lx: number, ly: number, len: number, ang: number, colour: string, a: number) => {
-    ctx.save();
-    ctx.globalAlpha = a;
-    ctx.translate(lx, ly);
-    ctx.rotate(ang);
-    ctx.beginPath();
-    ctx.moveTo(0, -len);
-    ctx.quadraticCurveTo(len * 0.6, 0, 0, len);
-    ctx.quadraticCurveTo(-len * 0.6, 0, 0, -len);
-    ctx.fillStyle = colour;
-    ctx.fill();
-    ctx.restore();
-  };
-  // dark base layer (depth)
-  for (let i = 0; i < 9; i++) {
-    const ang = rand() * Math.PI * 2;
-    const dist = rand() * radius * 0.7;
-    leaf(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, radius * (0.5 + rand() * 0.3), rand() * Math.PI, dark, alpha * 0.9);
-  }
-  // bright top layer
-  for (let i = 0; i < 11; i++) {
-    const ang = rand() * Math.PI * 2;
-    const dist = rand() * radius * 0.6;
-    leaf(cx + Math.cos(ang) * dist, cy + Math.sin(ang) * dist, radius * (0.45 + rand() * 0.3), rand() * Math.PI, fill, alpha);
-  }
+  ctx.lineJoin = "round";
+  // dark backing splat (depth + outline)
+  splatPath(ctx, cx, cy, radius * 1.04, seed);
+  ctx.fillStyle = dark;
+  ctx.fill();
+  // bright top splat
+  splatPath(ctx, cx, cy, radius * 0.92, seed ^ 0x9e37);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  // subtle highlight blob
+  splatPath(ctx, cx - radius * 0.12, cy - radius * 0.12, radius * 0.4, seed ^ 0x55aa);
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  ctx.fill();
 }
 
 /** "#rrggbb" -> "rgba(r,g,b,a)" */

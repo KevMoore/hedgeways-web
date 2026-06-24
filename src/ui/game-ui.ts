@@ -119,9 +119,9 @@ export class GameUI {
     this.beginTurn();
   }
 
-  private afterCommit(newly: string[], scored: number, actor: { name: string; animal: string }): void {
+  private afterCommit(newly: string[], scored: number, actor: { name: string; animal: string; colour?: string }): void {
     if (scored > 0) {
-      this.scene.flashEnclosed(newly, actor.animal);
+      this.scene.flashEnclosed(newly, actor.animal, actor.colour);
       sfx.score(scored);
       callout(`${actor.animal} ${actor.name} encloses ${scored} acre${scored === 1 ? "" : "s"}!`, "score");
     } else {
@@ -223,7 +223,7 @@ export class GameUI {
   private confirm(): void {
     if (this.pending.length === 0) return;
     const move: Move = { tiles: this.pending.map((t) => ({ tileId: t.tileId, cells: t.cells })) };
-    const actor = { name: "You", animal: this.game.currentPlayer.animal };
+    const actor = { name: "You", animal: this.game.currentPlayer.animal, colour: this.game.currentPlayer.colour };
     const res = this.game.commit(move);
     if (!res.ok) {
       this.setStatus(`Illegal: ${res.reason}`);
@@ -518,7 +518,7 @@ export class GameUI {
       this.beginTurn();
       return false;
     }
-    const actor = { name: this.game.currentPlayer.name, animal: this.game.currentPlayer.animal };
+    const actor = { name: this.game.currentPlayer.name, animal: this.game.currentPlayer.animal, colour: this.game.currentPlayer.colour };
     const res = this.game.commit(moves[0]);
     this.afterCommit(res.newlyEnclosed ?? [], res.scored ?? 0, actor);
     this.syncScene();

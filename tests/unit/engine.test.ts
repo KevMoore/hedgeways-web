@@ -38,6 +38,23 @@ describe("enclosure", () => {
     expect(findEnclosed(b).size).toBe(0);
   });
 
+  it("scores a big enclosed field at its full acre count (e.g. 20)", () => {
+    const b = new Board();
+    const wall = (x: number, y: number) => b.cells.set(key(x, y), { colour: "G", tileId: 0 });
+    // rectangle ring enclosing a 4-wide x 5-tall interior = 20 empty acres
+    for (let x = 0; x <= 5; x++) {
+      wall(x, 0);
+      wall(x, 6);
+    }
+    for (let y = 1; y <= 5; y++) {
+      wall(0, y);
+      wall(5, y);
+    }
+    const enc = findEnclosed(b);
+    expect(enc.size).toBe(20); // no cap on acres
+    expect(fields(enc)).toHaveLength(1); // a single field
+  });
+
   it("counts multiple acres in a larger field", () => {
     const b = new Board();
     const walls: [number, number][] = [];
