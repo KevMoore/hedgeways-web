@@ -99,6 +99,8 @@ const ACRE_POP_MS = 1300; // floating "+N acres" lifetime
 const BURST_MS = 1100; // enclosure celebration spark lifetime
 const IDLE_FRAME_MS = 1000 / 30; // cap ambient-livestock redraws at ~30fps
 const PLACE_ZOOM = 64; // px/cell the camera zooms IN to when a drag enters the board
+const PLACE_FOCUS_MIN = 42; // only auto-zoom-to-place when zoomed out below this (else it just lurches)
+const TOUCH_LIFT = 2; // cells a touch-dragged tile floats above the fingertip (clears the thumb)
 const BIRD_CAP = 22; // max decorative birds on the board (perf)
 const BEE_SWARM_CAP = 5; // max bee swarms on the board
 const BEE_MAX = 60; // max bees in one swarm (perf ceiling)
@@ -927,9 +929,12 @@ export class Scene {
    *  (no-op once at/above PLACE_ZOOM, so it fires once per drag and never
    *  fights a player who is already zoomed further in). The target cell is
    *  kept under its current screen pixel as the view scales up, so the tile
-   *  doesn't lurch. Locks the camera so the zoom persists past the placement. */
+   *  doesn't lurch. Locks the camera so the zoom persists past the placement.
+   *  Only kicks in when the board is genuinely zoomed OUT (below PLACE_FOCUS_MIN)
+   *  — at normal play scale the small zoom-and-pan just read as a lurch under the
+   *  finger, so we leave the camera alone and let the player pinch if they want. */
   focusForPlacement(cellX: number, cellY: number): void {
-    if (this.tScale >= PLACE_ZOOM) return;
+    if (this.tScale >= PLACE_FOCUS_MIN) return;
     const wx = cellX + 0.5;
     const wy = cellY + 0.5;
     const [sx, sy] = this.worldToScreen(wx, wy); // current screen pos of the cell
@@ -1033,12 +1038,12 @@ export class Scene {
 
   /** Convert client coords to the cell where the LIFTED ghost should sit.
    *  When touch-mode is off, this is just the finger cell. When on, the tile
-   *  sits ONE square to the RIGHT of the finger — a tight, predictable gap that
-   *  keeps the tile beside (not under) the finger, with the finger to its left.
-   *  Flips to the left only when the finger is hard against the right edge, so
-   *  the tile can't slide off-screen. (Orientation no longer changes the
-   *  offset — kept in the signature for callers and future per-orientation
-   *  tuning.) */
+   *  lifts straight UP from the fingertip and stays in the finger's COLUMN — so
+   *  it reads as WYSIWYG (you aim with the column under your thumb) and the tile
+   *  sits clear of the thumb where you can see it. A thumb comes from the bottom
+   *  of the screen, so up is the natural clearance direction; we only flip the
+   *  lift downward when the finger is hard against the TOP edge so the tile can't
+   *  slide off-screen. (Orientation kept in the signature for future tuning.) */
   liftedCellAt(
     clientX: number,
     clientY: number,
@@ -1051,9 +1056,9 @@ export class Scene {
     const [fx, fy] = this.cellAtClient(clientX, clientY);
     if (!this.touchGhostOffset) return { target: [fx, fy], finger: [fx, fy] };
     const rect = this.canvas.getBoundingClientRect();
-    const nearRightEdge = clientX - rect.left > rect.width * 0.88;
-    const dx = nearRightEdge ? -1 : 1; // 1 square right, or left when pinned at the right edge
-    return { target: [fx + dx, fy], finger: [fx, fy] };
+    const nearTopEdge = clientY - rect.top < rect.height * 0.16;
+    const dy = nearTopEdge ? TOUCH_LIFT : -TOUCH_LIFT; // lift above the thumb (or below when pinned at the top)
+    return { target: [fx, fy + dy], finger: [fx, fy] };
   }
 
   /** Which half of the board canvas a client-x falls on — used to seed the

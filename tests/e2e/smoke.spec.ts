@@ -21,7 +21,7 @@ test.describe("Hedgeways smoke", () => {
     expect(Array.isArray(state.scores)).toBe(true);
   });
 
-  test("human can place a hedge by tapping a highlighted cell", async ({ page }) => {
+  test("human can place a hedge by tapping a board cell", async ({ page }) => {
     await page.goto("/");
     await page.locator("#play").click();
     await expect(page.locator("canvas.board")).toBeVisible();
@@ -29,19 +29,17 @@ test.describe("Hedgeways smoke", () => {
     await page.locator(".hand .tile").first().click();
     await expect(page.locator(".hand .tile.sel")).toHaveCount(1);
 
-    // tap a highlighted (legal) cell — any covered cell, not just the anchor
+    // free placement: a selected tile lands wherever you tap an empty cell.
+    // tap the centre cell of the (empty) board, resolved via the camera math.
     const target = await page.evaluate(() => {
-      const ui = (window as any).__hedge.ui;
-      const sc = ui.scene;
-      const hl = [...sc.highlights.keys()];
-      const [x, y] = hl[Math.floor(hl.length / 2)].split(",").map(Number);
+      const sc = (window as any).__hedge.ui.scene;
       const canvas = document.querySelector("canvas.board") as HTMLCanvasElement;
       const r = canvas.getBoundingClientRect();
       const vw = canvas.width / sc.dpr;
       const vh = canvas.height / sc.dpr;
       return {
-        X: r.left + vw / 2 + (x + 0.5 - sc.camX) * sc.scale,
-        Y: r.top + vh / 2 + (y + 0.5 - sc.camY) * sc.scale,
+        X: r.left + vw / 2 + (0.5 - sc.camX) * sc.scale,
+        Y: r.top + vh / 2 + (0.5 - sc.camY) * sc.scale,
       };
     });
     await page.mouse.click(target.X, target.Y);

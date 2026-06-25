@@ -109,6 +109,7 @@ export class GameUI {
     this.scene.rotateRequestHandler = () => this.rotate();
 
     root.querySelector("#btn-undo")!.addEventListener("click", () => this.undo());
+    root.querySelector("#btn-rotate")!.addEventListener("click", () => this.rotate());
     root.querySelector("#btn-confirm")!.addEventListener("click", () => this.confirm());
     root.querySelector("#btn-help")!.addEventListener("click", () => showHowTo());
     root.querySelector("#btn-fit")!.addEventListener("click", () => this.scene.recenter());
@@ -1009,6 +1010,9 @@ export class GameUI {
     const human = !this.game.currentPlayer.isBot && !this.game.gameOver;
     const canConfirm = human && this.pending.length > 0 && this.pendingFits();
     btn(this.root, "#btn-undo", human && this.pending.length > 0);
+    // Rotate works on a selected (not-yet-placed) tile or the last pending one —
+    // so the player never has to hunt for the small floating board icon.
+    btn(this.root, "#btn-rotate", human && (this.selectedId != null || this.pending.length > 0));
     btn(this.root, "#btn-confirm", canConfirm);
     (this.root.querySelector("#btn-confirm") as HTMLElement).classList.toggle("ready", canConfirm);
   }
@@ -1271,6 +1275,7 @@ const TEMPLATE = `
       <div class="hand"></div>
       <div class="buttons">
         <button id="btn-undo" class="btn">Undo</button>
+        <button id="btn-rotate" class="btn">↻ Rotate</button>
         <button id="btn-confirm" class="btn primary">Plant hedges</button>
       </div>
     </footer>
