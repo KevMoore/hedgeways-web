@@ -5,7 +5,7 @@ import { showHowTo } from "./ui/howto";
 import type { Difficulty } from "./game/types";
 import type { GameConfig, GameSnapshot } from "./game/game";
 import { describeSave, loadActive } from "./game/persistence";
-import { PLAYER_KITS } from "./game/constants";
+import { FARMERS, LIVESTOCK, PLAYER_KITS } from "./game/constants";
 import { mountHomeCritters } from "./ui/home-critters";
 import { mountFarmerPortrait } from "./ui/farmer-portrait";
 import { getFarmerSprites } from "./render/farmer-sprites";
@@ -80,14 +80,27 @@ function renderStart(): void {
           </div>
         </label>
         <div id="slots" class="slots"></div>
-        <label class="count-row">Your farmer
-          <div class="animals" id="animals">
-            ${PLAYER_KITS.map(
-              (k, i) =>
-                `<button data-a="${i}" data-fid="${k.farmerId}" title="${k.farmerName}" style="--pc:${k.colour}"><span class="apic"></span><span class="aani">${k.animal}</span></button>`,
-            ).join("")}
+        <div class="identity">
+          <div class="pick">
+            <span class="pick-label">Your farmer</span>
+            <div class="cards farmers" id="farmers">
+              ${FARMERS.map(
+                (f, i) =>
+                  `<button class="card" data-i="${i}" data-fid="${f.id}" style="--pc:${f.colour}" title="${f.name}"><span class="card-pic farmer-pic"></span><span class="card-dot"></span></button>`,
+              ).join("")}
+            </div>
           </div>
-        </label>
+          <div class="pick">
+            <span class="pick-label">Your livestock</span>
+            <div class="cards livestock" id="livestock">
+              ${LIVESTOCK.map(
+                (l, i) =>
+                  `<button class="card" data-i="${i}" data-animal="${l.animal}" title="${l.name} — ${l.perkName}"><span class="card-pic critter-pic" data-animal="${l.animal}">${l.animal}</span><span class="card-name">${l.name}</span></button>`,
+              ).join("")}
+            </div>
+          </div>
+          <div class="preview" id="preview" aria-live="polite"></div>
+        </div>
       </div>
       <div class="start-btns">
         <button class="btn" id="how">How to play</button>
@@ -141,22 +154,68 @@ function renderStart(): void {
     });
   });
 
-  let humanKit = 0;
+  // The human picks a farmer (their identity colour + portrait) and, separately,
+  // a livestock (the animal stamped on their acres + its perk). Both are honoured
+  // straight through to the in-game players; bots fill the remaining ones.
+  let farmerIdx = 0;
+  let livestockIdx = 0;
   const pickerWidgets: { dispose: () => void }[] = [];
-  const animalBtns = app.querySelectorAll<HTMLButtonElement>("#animals button");
-  animalBtns.forEach((b, idx) => {
-    b.classList.toggle("on", Number(b.dataset.a) === humanKit);
-    const host = b.querySelector<HTMLElement>(".apic");
+
+  const farmerBtns = app.querySelectorAll<HTMLButtonElement>("#farmers .card");
+  farmerBtns.forEach((b, idx) => {
+    b.classList.toggle("on", idx === farmerIdx);
+    const host = b.querySelector<HTMLElement>(".farmer-pic");
     const fid = b.dataset.fid || "";
     if (host && getFarmerSprites().knows(fid)) {
-      const w = mountFarmerPortrait(host, fid, { size: 50, state: "idle", phase: idx * 0.27 });
+      const w = mountFarmerPortrait(host, fid, { size: 48, state: "idle", phase: idx * 0.27 });
       if (w) pickerWidgets.push(w);
     }
     b.addEventListener("click", () => {
-      humanKit = Number(b.dataset.a);
-      animalBtns.forEach((x) => x.classList.toggle("on", x === b));
+      if (idx === farmerIdx) return;
+      farmerIdx = idx;
+      farmerBtns.forEach((x, j) => x.classList.toggle("on", j === farmerIdx));
+      renderPreview();
     });
   });
+
+  const livestockBtns = app.querySelectorAll<HTMLButtonElement>("#livestock .card");
+  livestockBtns.forEach((b, idx) => {
+    b.classList.toggle("on", idx === livestockIdx);
+    b.addEventListener("click", () => {
+      sfx.unlock();
+      sfx.celebrate(LIVESTOCK[idx].animal); // hear the critter you picked
+      if (idx === livestockIdx) return;
+      livestockIdx = idx;
+      livestockBtns.forEach((x, j) => x.classList.toggle("on", j === livestockIdx));
+      renderPreview();
+    });
+  });
+  // bring the livestock cards to life with the real sprites
+  const stopLivestockCritters = mountHomeCritters([
+    ...app.querySelectorAll<HTMLElement>("#livestock .critter-pic"),
+  ]);
+
+  let previewWidget: { dispose: () => void } | null = null;
+  const previewEl = app.querySelector<HTMLElement>("#preview")!;
+  const renderPreview = (): void => {
+    const f = FARMERS[farmerIdx];
+    const l = LIVESTOCK[livestockIdx];
+    previewWidget?.dispose();
+    previewWidget = null;
+    previewEl.style.setProperty("--pc", f.colour);
+    previewEl.innerHTML = `
+      <span class="pv-farmer"></span>
+      <div class="pv-text">
+        <span class="pv-name">${f.name} <span class="pv-with">+ ${l.animal} ${l.name}</span></span>
+        <span class="pv-perk"><b>${l.perkName}</b> — ${l.perkBlurb}</span>
+      </div>`;
+    const host = previewEl.querySelector<HTMLElement>(".pv-farmer");
+    if (host && getFarmerSprites().knows(f.id)) {
+      previewWidget = mountFarmerPortrait(host, f.id, { size: 52, state: "happy", phase: 0.1 });
+    }
+    gsap.fromTo(previewEl, { opacity: 0.35, y: 4 }, { opacity: 1, y: 0, duration: 0.32, ease: "power2.out" });
+  };
+  renderPreview();
 
   if (resumable) {
     app.querySelector("#resume")!.addEventListener("click", () => {
@@ -166,36 +225,46 @@ function renderStart(): void {
 
   app.querySelector("#how")!.addEventListener("click", () => showHowTo());
   app.querySelector("#play")!.addEventListener("click", () => {
-    // assign livestock kits: the first human gets their chosen one, others fill the rest
-    const firstHuman = slots.slice(0, count).findIndex((s) => s.type === "human");
-    const free = [0, 1, 2, 3].filter((k) => firstHuman < 0 || k !== humanKit);
-    let ptr = 0;
-    const players = slots.slice(0, count).map((s, i) => {
-      const kitIdx = i === firstHuman ? humanKit : free[ptr++];
-      const kit = PLAYER_KITS[kitIdx];
+    // The first human gets their chosen farmer + livestock; every other seat draws
+    // a distinct farmer (unique colour/portrait) and a distinct livestock so the
+    // board stays readable. Farmers and livestock are independent picks now.
+    const sel = slots.slice(0, count);
+    const firstHuman = sel.findIndex((s) => s.type === "human");
+    const farmerPool = [0, 1, 2, 3].filter((i) => firstHuman < 0 || i !== farmerIdx);
+    const livestockPool = [0, 1, 2, 3].filter((i) => firstHuman < 0 || i !== livestockIdx);
+    let fp = 0;
+    let lp = 0;
+    const players = sel.map((s, i) => {
+      const fi = i === firstHuman ? farmerIdx : farmerPool[fp++];
+      const li = i === firstHuman ? livestockIdx : livestockPool[lp++];
+      const f = FARMERS[fi];
+      const l = LIVESTOCK[li];
       return {
-        name: s.type === "human" ? "You" : kit.farmerName,
+        name: s.type === "human" ? "You" : f.name,
         isBot: s.type === "bot",
         difficulty: s.diff,
-        colour: kit.colour,
-        animal: kit.animal,
-        farmerId: kit.farmerId,
-        farmerName: kit.farmerName,
+        colour: f.colour,
+        animal: l.animal,
+        farmerId: f.id,
+        farmerName: f.name,
       };
     });
     startGame({ players, seed: (Math.random() * 0xffffffff) >>> 0 });
   });
 
-  // animate the livestock chips with the real sprites (idle/graze)
+  // animate the decorative livestock chips with the real sprites (idle/graze)
   const stopCritters = mountHomeCritters([...app.querySelectorAll<HTMLElement>(".hedge-row span")]);
   stopHome = () => {
     stopCritters?.();
+    stopLivestockCritters?.();
+    previewWidget?.dispose();
     for (const w of pickerWidgets) w.dispose();
   };
 
   // staggered entrance
   gsap.from(".start > *", { y: 16, opacity: 0, duration: 0.5, ease: "back.out(1.6)", stagger: 0.07 });
   gsap.from(".hedge-row span", { scale: 0, opacity: 0, duration: 0.5, ease: "back.out(2.5)", stagger: 0.08, delay: 0.15 });
+  gsap.from(".identity .card", { scale: 0.6, opacity: 0, duration: 0.45, ease: "back.out(2)", stagger: 0.05, delay: 0.2 });
 }
 
 // start audio on the first user gesture (autoplay policy)

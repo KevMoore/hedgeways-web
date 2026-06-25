@@ -60,12 +60,32 @@ body {
   z-index: 1;
   max-width: 520px;
   margin: 0 auto;
-  padding: 6vh 20px 24px;
+  padding: 4vh 20px 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
   text-align: center;
+  /* The page itself is locked (body: overflow hidden). Let the start column
+     scroll within the viewport so the Start button is always reachable even on
+     short windows. */
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* short windows: tighten the header furniture so the setup card + Start button
+   stay on screen without needing to scroll */
+@media (max-height: 780px) {
+  .start {
+    padding-top: 2.5vh;
+    gap: 9px;
+  }
+  .logo {
+    font-size: clamp(26px, 6.5vw, 42px);
+  }
+  .tag {
+    font-size: 13px;
+  }
 }
 .logo,
 .brand {
@@ -156,10 +176,10 @@ body {
   background: #fff;
   border: 2px solid var(--frame);
   border-radius: 16px;
-  padding: 16px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 11px;
 }
 .count-row {
   display: flex;
@@ -182,51 +202,139 @@ body {
   background: var(--green);
   color: #fff;
 }
-.animals {
+/* ---------- identity picker: farmer + livestock + live preview ---------- */
+.identity {
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  gap: 9px;
 }
-.animals button {
+.pick {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pick-label {
+  font-weight: 700;
+  text-align: left;
+  font-size: 13px;
+  color: #4a5a4a;
+  letter-spacing: 0.2px;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.card {
   position: relative;
-  width: 64px;
-  height: 78px;
   border: 2px solid #b9c7b2;
   background: #fff;
-  border-radius: 12px;
+  border-radius: 14px;
   cursor: pointer;
+  padding: 6px 4px 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
   line-height: 1;
-  padding: 4px;
+  overflow: hidden;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--pc, #6cc24a) 60%, #b9c7b2);
+  }
+}
+.card:active {
+  transform: translateY(0) scale(0.96);
+}
+.card-pic {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  height: 46px;
+  font-size: 28px; /* emoji fallback before sprites load */
+}
+.card-pic canvas {
+  display: block;
+}
+.farmers .card-pic {
+  height: 50px;
+}
+.card-dot {
+  width: 16px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--pc);
+  opacity: 0.55;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.card-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: #4a5a4a;
+}
+.card.on {
+  border-color: var(--pc, #6cc24a);
+  box-shadow: 0 0 0 3px var(--pc, #6cc24a) inset;
+  background: color-mix(in srgb, var(--pc, #6cc24a) 12%, #fff);
+}
+.livestock .card.on {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px var(--green) inset;
+  background: color-mix(in srgb, var(--green) 12%, #fff);
+}
+.card.on .card-dot {
+  opacity: 1;
+  transform: scaleX(1.4);
+}
+.card.on .card-name {
+  color: var(--frame);
+}
+
+/* live identity preview banner */
+.preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 2px solid color-mix(in srgb, var(--pc, #6cc24a) 45%, #d7e2cf);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--pc, #6cc24a) 14%, #fff), #fff 70%);
+}
+.preview .pv-farmer {
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
   display: grid;
   place-items: end center;
-  overflow: hidden;
 }
-.animals button .apic {
-  display: inline-flex;
-  align-items: end;
+.preview .pv-farmer canvas {
+  display: block;
 }
-.animals button .apic svg,
-.animals button .apic canvas {
-  width: 50px;
-  height: auto;
+.pv-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
-.animals button .aani {
-  position: absolute;
-  bottom: -6px;
-  right: -6px;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  background: #fff;
-  border: 1.5px solid var(--pc);
-  border-radius: 50%;
-  font-size: 14px;
-  line-height: 1;
+.pv-name {
+  font-weight: 800;
+  color: var(--frame);
+  font-size: 15px;
 }
-.animals button.on {
-  border-color: var(--pc);
-  box-shadow: 0 0 0 3px var(--pc) inset;
-  background: color-mix(in srgb, var(--pc) 14%, #fff);
+.pv-with {
+  font-weight: 700;
+  color: color-mix(in srgb, var(--pc, #6cc24a) 78%, #2b3a2b);
+}
+.pv-perk {
+  font-size: 12px;
+  color: #4a5a4a;
+}
+.pv-perk b {
+  color: var(--frame);
 }
 /* HUD score chip: farmer portrait at the left */
 .pfarmer {
@@ -369,9 +477,12 @@ body {
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  background: var(--frame);
+  background: linear-gradient(180deg, #284e33, #1b3525);
   color: #fff;
   flex-wrap: wrap;
+  /* a trimmed-hedge ledge along the bottom of the bar */
+  border-bottom: 3px solid #4b9a55;
+  box-shadow: inset 0 -1px 0 rgba(124, 193, 114, 0.35), 0 2px 6px rgba(20, 40, 24, 0.18);
 }
 .hud .brand {
   font-size: 22px;
@@ -489,8 +600,9 @@ body {
 }
 .controls {
   flex: 0 0 auto;
-  background: #fff;
-  border-top: 2px solid var(--frame);
+  background: linear-gradient(180deg, #fbfdf7, #f2f7ea);
+  border-top: 3px solid #4b9a55;
+  box-shadow: inset 0 2px 0 rgba(124, 193, 114, 0.3);
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
@@ -501,6 +613,10 @@ body {
   font-weight: 600;
   min-height: 20px;
   color: #3a4a3a;
+}
+.status::before {
+  content: "🌿 ";
+  opacity: 0.7;
 }
 .hand {
   display: flex;
@@ -713,7 +829,6 @@ body {
   content: "";
 }
 .callout.info,
-.callout.pass,
 .callout.score {
   display: block;
 }
@@ -723,10 +838,6 @@ body {
 }
 .callout.info {
   color: #fff;
-}
-.callout.pass {
-  color: #cdd8c8;
-  font-size: clamp(15px, 4vw, 20px);
 }
 .callout.score {
   color: #ffd34d;
@@ -994,6 +1105,18 @@ body {
   padding: 5px 0;
   color: #3c4a3c;
   font-size: 14px;
+}
+/* bonus-acre list: warm, slightly card-like rows to feel rewarding */
+.ht-bonuses li {
+  align-items: flex-start;
+  padding: 7px 10px;
+  margin-top: 6px;
+  border-radius: 10px;
+  background: linear-gradient(120deg, #fff7e6, #fffdf7);
+  box-shadow: inset 0 0 0 1px #f0e2c2;
+}
+.ht-bonuses .ht-emoji {
+  margin-top: 1px;
 }
 .ht-close {
   width: 100%;

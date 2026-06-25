@@ -18,7 +18,7 @@ export function confetti(count = 90): void {
   setTimeout(() => layer.remove(), 3400);
 }
 
-type CalloutKind = "info" | "score" | "pass" | "streak" | "low";
+type CalloutKind = "info" | "score" | "streak" | "low";
 
 export function callout(text: string, kind: CalloutKind = "info"): void {
   // only one callout at a time so they never overlap

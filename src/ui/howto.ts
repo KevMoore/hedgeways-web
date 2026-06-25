@@ -1,5 +1,5 @@
 import gsap from "gsap";
-import { COLOUR_HEX, COLOUR_HEX_DARK, HAND_SIZE, MAX_LAY, PLAYER_KITS } from "../game/constants";
+import { COLOUR_HEX, COLOUR_HEX_DARK, HAND_SIZE, LIVESTOCK, MAX_LAY, PLAYER_KITS } from "../game/constants";
 import type { Colour } from "../game/types";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -268,6 +268,27 @@ export function showHowTo(): void {
     ),
   );
 
+  // Bonus acres — flair points (🔥) stacked on top of rules-pure acres.
+  const bonusList = el("ul", "ht-controls ht-bonuses");
+  const bonusRows: [string, string][] = [
+    ["🔁", "Streak — seal a field on back-to-back turns for Double, Triple… On fire! Each turn in the run adds flair."],
+    ["🌾", "Bumper turn — wall in 3+ acres, or seal 2+ fields, in a single turn for a Mega bonus."],
+    ...LIVESTOCK.map((l): [string, string] => [l.animal, `${l.perkName} — ${l.perkBlurb.toLowerCase()}`]),
+  ];
+  for (const [k, v] of bonusRows) {
+    const li = el("li");
+    li.append(el("span", "ht-emoji", k), document.createTextNode(v));
+    bonusList.append(li);
+  }
+  card.append(
+    section(
+      "🏆",
+      "Bonus acres",
+      "Bold farming earns flair points (🔥) on top of your acres — and they count toward winning. Your livestock has its own knack, too:",
+      bonusList,
+    ),
+  );
+
   card.append(
     section(
       "🚜",
@@ -284,7 +305,7 @@ export function showHowTo(): void {
   for (const [k, v] of [
     ["👆", "Tap a highlighted square to lay the selected hedge"],
     ["↻", "Rotate the selected hedge; Undo takes back a pending hedge"],
-    ["✅", "Confirm turn when you're happy; Pass if you can't move"],
+    ["✅", "Confirm turn once you're happy with your hedges"],
     ["🖐️", "Drag to pan, pinch or scroll to zoom, ⤢ recenters the board"],
     ["🔊", "Mute or unmute sound"],
     ["✕", "Quit to the menu — your game is saved"],

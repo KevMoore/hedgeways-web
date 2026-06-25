@@ -50,7 +50,7 @@ describe("snapshot", () => {
     for (let i = 0; i < 6; i++) {
       const m = chooseAiMove(g, { rng });
       if (m) g.commit(g.legalMoves(1)[0] ?? m);
-      else g.pass();
+      else g.skipStuck();
     }
     const snap = JSON.parse(JSON.stringify(g.toSnapshot()));
     const restored = new Game(snap.config, snap);
@@ -97,7 +97,7 @@ function playOut(difficulties: Difficulty[], seed: number, expertIters = 20): Ga
   while (!game.gameOver && turns < 2000) {
     const move = chooseAiMove(game, { rng, iterations: expertIters });
     if (move) game.commit(move);
-    else game.pass();
+    else game.skipStuck();
     turns++;
   }
   return game;
@@ -144,7 +144,7 @@ describe("AI", () => {
     for (let i = 0; i < 10; i++) {
       const m = chooseAiMove(game, { rng, maxMs: 120 });
       if (m) game.commit(m);
-      else game.pass();
+      else game.skipStuck();
       if (game.gameOver) break;
     }
     if (!game.gameOver) {

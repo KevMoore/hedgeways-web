@@ -3,6 +3,7 @@ import { Board, orient } from "../../src/game/board";
 import { validateMove } from "../../src/game/placement";
 import { findEnclosed, fields } from "../../src/game/scoring";
 import { generateMoves } from "../../src/game/moves";
+import { FARMERS, LIVESTOCK, livestockPerkFires } from "../../src/game/constants";
 import type { Colour, PlacedTile, Tile } from "../../src/game/types";
 import { key } from "../../src/game/types";
 
@@ -194,5 +195,36 @@ describe("move generation", () => {
     const b = new Board();
     const moves = generateMoves(b, [tile(1, "GYB")]);
     expect(moves.length).toBeGreaterThan(0);
+  });
+});
+
+describe("livestock perks", () => {
+  it("each animal's perk fires only for the playstyle it favours", () => {
+    // wide (🐮): a single 4+ acre field
+    expect(livestockPerkFires("wide", { scored: 4, fields: 1, biggest: 4, streak: 1 })).toBe(true);
+    expect(livestockPerkFires("wide", { scored: 3, fields: 1, biggest: 3, streak: 1 })).toBe(false);
+
+    // multi (🐷): 2+ fields in one move
+    expect(livestockPerkFires("multi", { scored: 2, fields: 2, biggest: 1, streak: 1 })).toBe(true);
+    expect(livestockPerkFires("multi", { scored: 5, fields: 1, biggest: 5, streak: 1 })).toBe(false);
+
+    // streak (🐓): a 3-turn+ sealing streak
+    expect(livestockPerkFires("streak", { scored: 1, fields: 1, biggest: 1, streak: 3 })).toBe(true);
+    expect(livestockPerkFires("streak", { scored: 1, fields: 1, biggest: 1, streak: 2 })).toBe(false);
+
+    // steady (🐑): any move sealing 2+ acres
+    expect(livestockPerkFires("steady", { scored: 2, fields: 1, biggest: 2, streak: 1 })).toBe(true);
+    expect(livestockPerkFires("steady", { scored: 1, fields: 1, biggest: 1, streak: 9 })).toBe(false);
+  });
+
+  it("no perk fires on a scoreless move", () => {
+    for (const perk of ["wide", "multi", "streak", "steady"] as const) {
+      expect(livestockPerkFires(perk, { scored: 0, fields: 0, biggest: 0, streak: 0 })).toBe(false);
+    }
+  });
+
+  it("every farmer has a distinct colour and every livestock a distinct perk", () => {
+    expect(new Set(FARMERS.map((f) => f.colour)).size).toBe(FARMERS.length);
+    expect(new Set(LIVESTOCK.map((l) => l.perk)).size).toBe(LIVESTOCK.length);
   });
 });
