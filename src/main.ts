@@ -157,6 +157,11 @@ function renderStart(): void {
   // The human picks a farmer (their identity colour + portrait) and, separately,
   // a livestock (the animal stamped on their acres + its perk). Both are honoured
   // straight through to the in-game players; bots fill the remaining ones.
+  // On short screens the cards shrink (see the max-height CSS), so the mounted
+  // portrait canvases shrink to match or they'd overflow and clip the heads.
+  const compact = typeof matchMedia !== "undefined" && matchMedia("(max-height: 720px)").matches;
+  const FARMER_CARD_SIZE = compact ? 40 : 48;
+  const PREVIEW_SIZE = compact ? 44 : 52;
   let farmerIdx = 0;
   let livestockIdx = 0;
   const pickerWidgets: { dispose: () => void }[] = [];
@@ -167,7 +172,7 @@ function renderStart(): void {
     const host = b.querySelector<HTMLElement>(".farmer-pic");
     const fid = b.dataset.fid || "";
     if (host && getFarmerSprites().knows(fid)) {
-      const w = mountFarmerPortrait(host, fid, { size: 48, state: "idle", phase: idx * 0.27 });
+      const w = mountFarmerPortrait(host, fid, { size: FARMER_CARD_SIZE, state: "idle", phase: idx * 0.27 });
       if (w) pickerWidgets.push(w);
     }
     b.addEventListener("click", () => {
@@ -211,7 +216,7 @@ function renderStart(): void {
       </div>`;
     const host = previewEl.querySelector<HTMLElement>(".pv-farmer");
     if (host && getFarmerSprites().knows(f.id)) {
-      previewWidget = mountFarmerPortrait(host, f.id, { size: 52, state: "happy", phase: 0.1 });
+      previewWidget = mountFarmerPortrait(host, f.id, { size: PREVIEW_SIZE, state: "happy", phase: 0.1 });
     }
     gsap.fromTo(previewEl, { opacity: 0.35, y: 4 }, { opacity: 1, y: 0, duration: 0.32, ease: "power2.out" });
   };

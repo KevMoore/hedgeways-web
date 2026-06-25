@@ -2,6 +2,7 @@ import {
   ACRE_HEX,
   BOARD_BG,
   COLOUR_HEX,
+  COLOUR_HEX_DARK,
   HEDGE_BASE,
   HEDGE_DANGER,
   HEDGE_DANGER_DARK,
@@ -514,7 +515,12 @@ export class Scene {
    *  the tile and the offset stays as small as possible (the tile is only one
    *  cell thick across its short axis). The offset flips away from the nearest
    *  canvas edge so the tile doesn't get pushed off-screen. */
-  liftedCellAt(clientX: number, clientY: number, ori: "H" | "V"): {
+  liftedCellAt(
+    clientX: number,
+    clientY: number,
+    ori: "H" | "V",
+    preferSide: "L" | "R" = "L",
+  ): {
     target: [number, number];
     finger: [number, number];
   } {
@@ -528,12 +534,24 @@ export class Scene {
       const down = clientY - rect.top < rect.height * 0.3;
       return { target: [fx, down ? fy + SEP : fy - SEP], finger: [fx, fy] };
     }
-    // vertical tile (1 cell wide) → offset sideways; left by default, right if
-    // the finger is near the left edge. A small upward bias lifts it to sit
-    // beside-and-slightly-above the finger rather than hanging straight down.
-    const right = clientX - rect.left < rect.width * 0.3;
+    // vertical tile (1 cell wide) → offset sideways. Honour the side the drag
+    // started on (preferSide) so the tile stays where it was lifted from and
+    // doesn't flip mid-drag (which felt sticky). Only flip when the chosen side
+    // would push the tile off the visible canvas. A small upward bias lifts it
+    // to sit beside-and-slightly-above the finger.
+    const sx = clientX - rect.left;
+    let side = preferSide;
+    if (side === "L" && sx < rect.width * 0.16) side = "R";
+    else if (side === "R" && sx > rect.width * 0.84) side = "L";
     const UP_BIAS = 1;
-    return { target: [right ? fx + SEP : fx - SEP, fy - UP_BIAS], finger: [fx, fy] };
+    return { target: [side === "L" ? fx - SEP : fx + SEP, fy - UP_BIAS], finger: [fx, fy] };
+  }
+
+  /** Which half of the board canvas a client-x falls on — used to seed the
+   *  touch lift toward the side a drag was started from. */
+  sideOfClientX(clientX: number): "L" | "R" {
+    const rect = this.canvas.getBoundingClientRect();
+    return clientX - rect.left < rect.width / 2 ? "L" : "R";
   }
 
   setGhost(cells: PlacedCell[] | null, valid: boolean): void {
@@ -1310,6 +1328,27 @@ export class Scene {
     ctx.fillStyle = danger && alpha < 1 ? "#ffffff" : COLOUR_HEX[colour];
     ctx.fillRect(px, py, s, s);
 
+    // Leafy mottling over the colour panel so a THICK hedge mass reads as dense
+    // coloured foliage rather than a flat painted field (which looks like an
+    // enclosed acre). Interior cells draw no perimeter ribbon, so without this
+    // they'd be bare colour. Darker same-hue clumps keep the Qwirkle colour
+    // identity intact. Skip on ghost/danger previews (alpha < 1) to keep them clean.
+    if (alpha >= 1 && !danger) {
+      const leafRng = makeRng(hash(x, y) ^ 0x6d2b79f5);
+      ctx.fillStyle = COLOUR_HEX_DARK[colour];
+      const clumps = Math.max(6, Math.round(s * 0.2));
+      for (let i = 0; i < clumps; i++) {
+        const lx = px + leafRng() * s;
+        const ly = py + leafRng() * s;
+        const lrx = s * (0.06 + leafRng() * 0.07);
+        ctx.globalAlpha = 0.16 + leafRng() * 0.2;
+        ctx.beginPath();
+        ctx.ellipse(lx, ly, lrx, lrx * (0.5 + leafRng() * 0.2), leafRng() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = alpha;
+    }
+
     const nH = (hedgeMask & 1) !== 0;
     const eH = (hedgeMask & 2) !== 0;
     const sH = (hedgeMask & 4) !== 0;
@@ -1333,78 +1372,118 @@ export class Scene {
     if (!wH) ctx.fillRect(px, py, stripe, s);
     if (!eH) ctx.fillRect(px + s - stripe, py, stripe, s);
 
-    // thin dark separator on internal edges (so adjacent placed cells still
-    // read as individual tiles). Inset by the hedge-stripe thickness on the
-    // perpendicular outward sides so the separator never cuts through hedge.
-    ctx.fillStyle = `rgba(20,40,24,0.35)`;
-    const sep = Math.max(1, s * 0.022);
-    const iN = nH ? 0 : stripe;
-    const iE = eH ? 0 : stripe;
-    const iS = sH ? 0 : stripe;
-    const iW = wH ? 0 : stripe;
-    if (nH) ctx.fillRect(px + iW, py, s - iW - iE, sep);
-    if (eH) ctx.fillRect(px + s - sep, py + iN, sep, s - iN - iS);
-    if (sH) ctx.fillRect(px + iW, py + s - sep, s - iW - iE, sep);
-    if (wH) ctx.fillRect(px, py + iN, sep, s - iN - iS);
+    // NB: no separator line on internal edges — adjacent hedges in the same
+    // group blend into one seamless mass (the foliage ribbon + colour panel
+    // already mark the outer boundary of the whole group).
 
-    // Bushy clumps along the outward sides — fewer, larger puffs with size
-    // variation so the hedge reads as individual shrubs, not a uniform ring.
+    // Leafy foliage along the outward sides: many small, rotated leaf ovals
+    // (not round puffs) so the hedge reads as dense leaves. Each leaf is a
+    // slightly larger dark oval under a body oval, giving a thin shadow rim
+    // between leaves for depth. Positions jitter outward for a bumpy silhouette.
     const rng = makeRng(hash(x, y));
-    const puffsPerSide = Math.max(6, Math.round(s * 0.22));
-    const margin = s * 0.07;
-    const puff = (cxp: number, cyp: number, r: number) => {
+    const perSide = Math.max(7, Math.round(s * 0.25));
+    const margin = s * 0.08;
+    const leaf = (cxp: number, cyp: number, scale: number) => {
+      const rot = rng() * Math.PI;
+      const rx = s * (0.05 + rng() * 0.03) * scale;
+      const ry = rx * (0.5 + rng() * 0.22); // ry < rx → leaf-ish oval, not a circle
       ctx.fillStyle = dark;
       ctx.beginPath();
-      ctx.arc(cxp, cyp, r * 1.06, 0, Math.PI * 2);
+      ctx.ellipse(cxp, cyp, rx * 1.22, ry * 1.22, rot, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = body;
       ctx.beginPath();
-      ctx.arc(cxp, cyp, r * 0.93, 0, Math.PI * 2);
+      ctx.ellipse(cxp, cyp, rx, ry, rot, 0, Math.PI * 2);
       ctx.fill();
     };
-    // Always draw the full puff sequence on each outward side, including
-    // corners — adjacent cells overlap their corner puffs to form a
-    // continuous ribbon around the whole hedge group.
+    // (ox,oy) = outward unit normal for the side; leaves jitter out along it for
+    // a bumpy edge and along the side for natural clumping. Corners overlap with
+    // neighbours to form a continuous leafy ribbon around the whole hedge group.
     const side = (
       enabled: boolean,
       xAt: (t: number) => number,
       yAt: (t: number) => number,
+      ox: number,
+      oy: number,
     ) => {
       if (!enabled) return;
-      for (let i = 0; i <= puffsPerSide; i++) {
-        const t = i / puffsPerSide;
-        const jx = (rng() - 0.5) * s * 0.035;
-        const jy = (rng() - 0.5) * s * 0.035;
-        // most puffs are medium; ~25% are big bushy clumps
-        const big = rng() < 0.25;
-        const r = s * (big ? 0.12 + rng() * 0.025 : 0.085 + rng() * 0.025);
-        puff(xAt(t) + jx, yAt(t) + jy, r);
+      for (let i = 0; i <= perSide; i++) {
+        const t = i / perSide;
+        const out = rng() * s * 0.055; // outward bump
+        const along = (rng() - 0.5) * s * 0.06; // jitter along the side
+        const big = rng() < 0.2;
+        const scale = big ? 1.25 + rng() * 0.3 : 0.78 + rng() * 0.34;
+        leaf(xAt(t) + ox * out - oy * along, yAt(t) + oy * out + ox * along, scale);
       }
     };
-    side(!nH, (t) => px + margin + t * (s - 2 * margin), () => py + margin);
-    side(!eH, () => px + s - margin, (t) => py + margin + t * (s - 2 * margin));
-    side(!sH, (t) => px + margin + t * (s - 2 * margin), () => py + s - margin);
-    side(!wH, () => px + margin, (t) => py + margin + t * (s - 2 * margin));
+    side(!nH, (t) => px + margin + t * (s - 2 * margin), () => py + margin, 0, -1);
+    side(!eH, () => px + s - margin, (t) => py + margin + t * (s - 2 * margin), 1, 0);
+    side(!sH, (t) => px + margin + t * (s - 2 * margin), () => py + s - margin, 0, 1);
+    side(!wH, () => px + margin, (t) => py + margin + t * (s - 2 * margin), -1, 0);
 
-    // Sun-catch highlights: a few brighter dots scattered along the outer rim
+    // Sun-catch: scattered lighter leaf specks for the leaves-in-light look.
     const rng2 = makeRng(hash(x, y) ^ 0x5a7d);
-    const hl = body === HEDGE_DANGER ? "rgba(255,210,170,0.55)" : "rgba(180,230,150,0.7)";
-    ctx.fillStyle = hl;
-    const dot = (enabled: boolean, xAt: (t: number) => number, yAt: (t: number) => number) => {
+    ctx.fillStyle = body === HEDGE_DANGER ? "rgba(255,205,165,0.6)" : "rgba(176,224,138,0.72)";
+    const speck = (enabled: boolean, xAt: (t: number) => number, yAt: (t: number) => number) => {
       if (!enabled) return;
-      const n = Math.max(2, Math.round(s * 0.07));
+      const n = Math.max(3, Math.round(s * 0.1));
       for (let i = 0; i < n; i++) {
-        const t = (i + 0.3 + rng2() * 0.4) / n;
-        const r = s * (0.02 + rng2() * 0.015);
+        const t = (i + 0.25 + rng2() * 0.5) / n;
+        const rx = s * (0.022 + rng2() * 0.02);
         ctx.beginPath();
-        ctx.arc(xAt(t), yAt(t), r, 0, Math.PI * 2);
+        ctx.ellipse(xAt(t), yAt(t), rx, rx * 0.62, rng2() * Math.PI, 0, Math.PI * 2);
         ctx.fill();
       }
     };
-    dot(!nH, (t) => px + margin + t * (s - 2 * margin), () => py + margin * 0.6);
-    dot(!eH, () => px + s - margin * 0.6, (t) => py + margin + t * (s - 2 * margin));
-    dot(!sH, (t) => px + margin + t * (s - 2 * margin), () => py + s - margin * 0.6);
-    dot(!wH, () => px + margin * 0.6, (t) => py + margin + t * (s - 2 * margin));
+    speck(!nH, (t) => px + margin + t * (s - 2 * margin), () => py + margin * 0.8);
+    speck(!eH, () => px + s - margin * 0.8, (t) => py + margin + t * (s - 2 * margin));
+    speck(!sH, (t) => px + margin + t * (s - 2 * margin), () => py + s - margin * 0.8);
+    speck(!wH, () => px + margin * 0.8, (t) => py + margin + t * (s - 2 * margin));
+
+    // A few bare twigs poking out of the foliage for a wilder, natural hedge.
+    // Each is a short forked brown stroke angled roughly along the outward
+    // normal so its tip pokes past the leaf band.
+    ctx.strokeStyle = body === HEDGE_DANGER ? "#7a4a36" : "#5e4129";
+    ctx.lineCap = "round";
+    ctx.lineWidth = Math.max(1, s * 0.013);
+    const twig = (bx: number, by: number, ox: number, oy: number) => {
+      // point inward (toward the cell interior), not out past the foliage edge
+      const a = Math.atan2(-oy, -ox) + (rng() - 0.5) * 0.8;
+      const len = s * (0.06 + rng() * 0.055);
+      const ex = bx + Math.cos(a) * len;
+      const ey = by + Math.sin(a) * len;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      // a small offshoot ~60% along the twig
+      const mx = bx + Math.cos(a) * len * 0.6;
+      const my = by + Math.sin(a) * len * 0.6;
+      const a2 = a + (rng() < 0.5 ? 0.8 : -0.8);
+      const fl = len * 0.45;
+      ctx.beginPath();
+      ctx.moveTo(mx, my);
+      ctx.lineTo(mx + Math.cos(a2) * fl, my + Math.sin(a2) * fl);
+      ctx.stroke();
+    };
+    const twigSide = (
+      enabled: boolean,
+      xAt: (t: number) => number,
+      yAt: (t: number) => number,
+      ox: number,
+      oy: number,
+    ) => {
+      if (!enabled) return;
+      const n = Math.max(3, Math.round(s * 0.05));
+      for (let i = 0; i < n; i++) {
+        const t = (i + 0.2 + rng() * 0.6) / n;
+        twig(xAt(t), yAt(t), ox, oy);
+      }
+    };
+    twigSide(!nH, (t) => px + margin + t * (s - 2 * margin), () => py + margin, 0, -1);
+    twigSide(!eH, () => px + s - margin, (t) => py + margin + t * (s - 2 * margin), 1, 0);
+    twigSide(!sH, (t) => px + margin + t * (s - 2 * margin), () => py + s - margin, 0, 1);
+    twigSide(!wH, () => px + margin, (t) => py + margin + t * (s - 2 * margin), -1, 0);
 
     ctx.restore();
   }
