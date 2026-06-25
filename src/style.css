@@ -412,6 +412,20 @@ body {
     box-shadow: 0 0 0 2px #fff inset, 0 0 0 6px rgba(255, 255, 255, 0);
   }
 }
+/* A bot deliberating — a warmer, quicker amber breath that overrides the
+   white active pulse to read as "thinking…". */
+.pchip.active.thinking {
+  animation: chip-think 1.05s ease-in-out infinite;
+}
+@keyframes chip-think {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px #fff inset, 0 0 0 0 rgba(255, 211, 77, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 2px #fff inset, 0 0 0 8px rgba(255, 211, 77, 0);
+  }
+}
 .pchip.lead .pscore {
   color: #ffd34d;
 }

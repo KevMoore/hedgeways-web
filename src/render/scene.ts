@@ -58,6 +58,13 @@ export class Scene {
   private touchGhostOffset = false;
   /** Finger cell to draw a small "you are here" dot during a touch drag. */
   private fingerMarker: { x: number; y: number } | null = null;
+  /** Cached client point of the active drag — used to auto-pan the camera
+   *  when the finger/cursor lingers near a canvas edge so the player can
+   *  reach off-screen areas of large boards. Cleared on drag end. */
+  private dragClient: { x: number; y: number } | null = null;
+  /** perf.now() of the previous auto-pan tick — gives us frame-rate-
+   *  independent pan speed without depending on Scene-wide lastT. */
+  private autoPanLastT = 0;
   private highlights = new Map<string, Colour>(); // cell -> colour of the hedge segment that could sit there
   private flash = new Map<string, number>(); // cell -> start time
   private placedAt = new Map<string, number>(); // cell -> placement time (pop-in anim)
@@ -71,7 +78,12 @@ export class Scene {
   private tScale = 56; // camera targets (eased toward each frame)
   private tCamX = 0;
   private tCamY = 0;
-  private userMoved = false;
+  /** Set after the first syncBoard. A board that already has tiles on that
+   *  first sync (a resumed / pre-loaded game) gets framed once; a fresh game
+   *  that starts empty never force-zooms as it grows — it only nudges via
+   *  ensureVisible() when a tile lands outside the viewport. A manual Fit
+   *  (recenter) re-frames on demand. */
+  private firstSyncDone = false;
   private needsDraw = true;
   private lastDraw = 0; // perf.now() of the previous draw (for idle-animation throttle)
 
@@ -88,6 +100,10 @@ export class Scene {
     | null = null;
   dragMove: ((cellX: number, cellY: number, clientX: number, clientY: number) => void) | null = null;
   dragEnd: ((cellX: number, cellY: number, clientX: number, clientY: number) => void) | null = null;
+  /** Fires each frame the camera auto-pans during a drag, so game-ui can
+   *  re-resolve the ghost cell from the cached client point (the cell under
+   *  the finger shifts as the camera moves, even if the finger is still). */
+  onAutoPan: ((clientX: number, clientY: number) => void) | null = null;
   /** World cell to anchor a floating rotate icon to (top-right corner of the
    *  cell). When null, no icon is drawn. */
   private rotateAt: { x: number; y: number } | null = null;
@@ -121,6 +137,9 @@ export class Scene {
     window.addEventListener("resize", this.onResize);
     const loop = () => {
       if (!this.alive) return;
+      // Auto-pan FIRST so stepCamera can ease toward the freshly-nudged target
+      // in the same frame; otherwise the player sees a one-frame lag at edges.
+      const panned = this.maybeAutoPan();
       const moving = this.stepCamera();
       const now = performance.now();
       const transient =
@@ -132,6 +151,7 @@ export class Scene {
         this.ghost !== null || // pulse the held-tile ghost while it exists
         this.rotateAnims.length > 0 ||
         this.connectFlash.size > 0 ||
+        panned ||
         this.animating();
       const idleAnimals = !this.reduceMotion && this.acres.size > 0;
       // Real-time animation (camera ease, acre pops, bursts) draws every frame.
@@ -177,6 +197,8 @@ export class Scene {
     this.dragStart = null;
     this.dragMove = null;
     this.dragEnd = null;
+    this.onAutoPan = null;
+    this.dragClient = null;
   }
 
   private animating(): boolean {
@@ -198,7 +220,7 @@ export class Scene {
     this.bursts = [];
     this.critters.clear();
     this.critterComp.clear();
-    this.userMoved = false;
+    this.firstSyncDone = false;
     this.scale = this.tScale = 56;
     this.camX = this.tCamX = 0.5;
     this.camY = this.tCamY = 0.5;
@@ -219,8 +241,16 @@ export class Scene {
     this.enclosed = new Set(enclosed);
     if (acres) this.acres = new Map(acres);
     this.rebuildCritters();
-    if (!this.userMoved) this.fitBoard();
-    else this.ensureVisible();
+    // Frame a resumed/pre-loaded board once (tiles present on the very first
+    // sync); otherwise only re-fit when a tile drifts off-screen, so a fresh
+    // game never force-zooms as it grows. Manual recenter (Fit) overrides this.
+    if (!this.firstSyncDone) {
+      this.firstSyncDone = true;
+      if (this.cells.size > 0) this.fitBoard();
+      else this.ensureVisible();
+    } else {
+      this.ensureVisible();
+    }
     this.needsDraw = true;
   }
 
@@ -384,9 +414,8 @@ export class Scene {
     if (x0 < pad || y0 < pad || x1 > vw - pad || y1 > vh - pad) this.fitBoard();
   }
 
-  /** Manual recenter (e.g. a Fit button). */
+  /** Manual recenter (e.g. a Fit button) — re-frames the whole board on demand. */
   recenter(): void {
-    this.userMoved = false;
     this.fitBoard();
   }
 
@@ -407,6 +436,59 @@ export class Scene {
     }
     if (this.ghost) for (const c of this.ghost.cells) consider(c.x, c.y);
     return { minX, minY, maxX, maxY };
+  }
+
+  /** Game-ui calls this whenever the active drag's finger/cursor position
+   *  changes (and with null on drag end). The scene uses the cached point
+   *  to auto-pan the camera when the finger lingers near a canvas edge. */
+  setDragClient(clientX: number | null, clientY = 0): void {
+    if (clientX === null) {
+      this.dragClient = null;
+      this.autoPanLastT = 0;
+    } else {
+      this.dragClient = { x: clientX, y: clientY };
+    }
+  }
+
+  /** Per-frame auto-pan: if a drag is active and the cached client point sits
+   *  in an edge band of the canvas, push tCam* (and cam*) toward that edge.
+   *  Speed is in screen pixels/ms so it feels the same at any zoom level. */
+  private maybeAutoPan(): boolean {
+    if (!this.dragClient) {
+      this.autoPanLastT = 0;
+      return false;
+    }
+    const rect = this.canvas.getBoundingClientRect();
+    const x = this.dragClient.x - rect.left;
+    const y = this.dragClient.y - rect.top;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
+      this.autoPanLastT = 0;
+      return false;
+    }
+    const margin = Math.min(rect.width, rect.height) * 0.18;
+    let fx = 0;
+    let fy = 0;
+    if (x < margin) fx = -(1 - x / margin);
+    else if (x > rect.width - margin) fx = 1 - (rect.width - x) / margin;
+    if (y < margin) fy = -(1 - y / margin);
+    else if (y > rect.height - margin) fy = 1 - (rect.height - y) / margin;
+    if (fx === 0 && fy === 0) {
+      this.autoPanLastT = 0;
+      return false;
+    }
+    const now = performance.now();
+    const dt = this.autoPanLastT === 0 ? 16 : Math.min(60, now - this.autoPanLastT);
+    this.autoPanLastT = now;
+    const speedPxPerMs = 0.45; // ~450 px/sec at max intensity
+    const dxCells = (fx * speedPxPerMs * dt) / this.scale;
+    const dyCells = (fy * speedPxPerMs * dt) / this.scale;
+    this.camX += dxCells;
+    this.camY += dyCells;
+    this.tCamX += dxCells;
+    this.tCamY += dyCells;
+    this.needsDraw = true;
+    if (this.onAutoPan) this.onAutoPan(this.dragClient.x, this.dragClient.y);
+    return true;
   }
 
   /** Game-ui toggles this when a touch-initiated drag starts/ends. */
@@ -627,6 +709,7 @@ export class Scene {
         if (this.dragStart(cx, cy, e.clientX, e.clientY, e.pointerType === "touch")) {
           c.setPointerCapture(e.pointerId);
           claimedPointer = e.pointerId;
+          this.setDragClient(e.clientX, e.clientY); // arm edge-auto-pan
           return;
         }
       }
@@ -643,6 +726,7 @@ export class Scene {
     });
     c.addEventListener("pointermove", (e) => {
       if (claimedPointer === e.pointerId) {
+        this.setDragClient(e.clientX, e.clientY); // keep auto-pan tracking
         if (this.dragMove) {
           const rect = c.getBoundingClientRect();
           const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
@@ -670,7 +754,6 @@ export class Scene {
         if (pinchDist > 0) this.zoomBy(d / pinchDist);
         pinchDist = d;
         moved = true;
-        this.userMoved = true;
         return;
       }
       // Don't pan until movement passes a finger-friendly threshold; below it the
@@ -681,7 +764,6 @@ export class Scene {
       }
       if (!moved) {
         moved = true;
-        this.userMoved = true;
         lastX = e.clientX; // reset origin so the camera doesn't jump by the slop amount
         lastY = e.clientY;
         return;
@@ -709,6 +791,7 @@ export class Scene {
       }
       if (claimedPointer === e.pointerId) {
         claimedPointer = -1;
+        this.setDragClient(null); // disarm edge-auto-pan
         if (this.dragEnd) {
           const rect = c.getBoundingClientRect();
           const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
@@ -733,6 +816,7 @@ export class Scene {
       }
       if (claimedPointer === e.pointerId) {
         claimedPointer = -1;
+        this.setDragClient(null);
         if (this.dragEnd) {
           const rect = c.getBoundingClientRect();
           const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
@@ -751,7 +835,6 @@ export class Scene {
       (e) => {
         e.preventDefault();
         this.zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1);
-        this.userMoved = true;
       },
       { passive: false },
     );
@@ -896,10 +979,15 @@ export class Scene {
       ctx.fill();
     }
 
-    // ghost — pulses gently to indicate it's the "selected / in-hand" tile
+    // ghost — pulses gently to indicate it's the "selected / in-hand" tile.
+    // The mask is computed from the ghost's OWN cells only — never the committed
+    // board — so the held tile renders as a discrete floating hedge with full
+    // outer puffs. (Merging its puffs into adjacent committed tiles made the
+    // tile look like it was snapping/fusing onto them mid-drag.) It fuses for
+    // real only once it's actually placed and becomes a board cell.
     if (this.ghost) {
       const gKeys = new Set(this.ghost.cells.map((c) => key(c.x, c.y)));
-      const hasHedge = (x: number, y: number) => this.cells.has(key(x, y)) || gKeys.has(key(x, y));
+      const hasHedge = (x: number, y: number) => gKeys.has(key(x, y));
       // Soft 1.4Hz pulse: alpha breathes 0.45→0.75, scale 0.97→1.03.
       const pulse = (Math.sin(now / 220) + 1) / 2; // 0..1
       const ghostAlpha = this.ghost.valid ? 0.5 + pulse * 0.25 : 0.4;

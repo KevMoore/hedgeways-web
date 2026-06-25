@@ -3,13 +3,14 @@ import { orient } from "../game/board";
 import { COLOUR_HEX, COLOUR_HEX_DARK, COLOUR_NAME, MAX_LAY } from "../game/constants";
 import { Game, type GameConfig, type GameSnapshot, type TurnResult, totalScore } from "../game/game";
 import { generateMoves } from "../game/moves";
-import type { Cell, Colour, Move, Orientation, PlacedTile, Tile } from "../game/types";
+import type { Cell, Colour, Difficulty, Move, Orientation, PlacedTile, Tile } from "../game/types";
 import { COLOURS, key } from "../game/types";
 import gsap from "gsap";
 import { sfx } from "../audio";
 import { mountFarmerPortrait } from "./farmer-portrait";
 import { getFarmerSprites } from "../render/farmer-sprites";
 import { Scene } from "../render/scene";
+import { prefersReducedMotion } from "../render/sprites";
 import { callout, confetti } from "./effects";
 import { showHowTo } from "./howto";
 import { clearActive, saveActive } from "../game/persistence";
@@ -48,11 +49,27 @@ export class GameUI {
   /** active farmer-portrait raf widgets, disposed before re-render */
   private farmerWidgets: { dispose: () => void }[] = [];
   private alive = true;
+  /** Honour the OS "reduce motion" setting — bot beats collapse to a quick,
+   *  near-instant cadence so the game stays snappy and comfortable. */
+  private reduceMotion = prefersReducedMotion();
   /** low-bag tiers already announced, so each callout fires at most once */
   private bagWarned = new Set<number>();
+  /** bot player ids that have already taken their first turn — used to give an
+   *  expert a one-off longer "opening ponder" the first time it plays. */
+  private pondered = new Set<number>();
   /** when a board pending is picked up via drag, remember where it came from
    *  so we can restore on cancel / invalid drop */
   private pickedOrigin: { placement: PlacedTile; oriIdx: number } | null = null;
+  /** True while a tile is being actively dragged (hand chip OR board pickup).
+   *  Suppresses the mid-drag red/green ghost flicker as the cursor skims past
+   *  occupied cells — validity is reported once at drop time via bray + bounce
+   *  / flashInvalid, never while the finger is still moving. */
+  private dragging = false;
+  /** Offset (in cells) from the dragged tile's anchor (segment 0) to the cell
+   *  the player actually grabbed. Applied so the grabbed point stays under the
+   *  finger — the tile keeps its position on pickup instead of snapping its
+   *  anchor to the grab cell. Zero for fresh hand placement (anchor = finger). */
+  private grabOffset = { dx: 0, dy: 0 };
   /** Per-player snapshot of hand tile ids on the last renderHand — used to
    *  detect which tiles are NEW so they can fly in from the bag. */
   private lastHandIds = new Map<number, Set<number>>();
@@ -78,9 +95,13 @@ export class GameUI {
     this.scene.leaveHandler = () => this.scene.setGhost(null, false);
     // Drag a placed pending tile around the board to reposition it (or off
     // the board entirely, back to the hand).
-    this.scene.dragStart = (x, y, _cx, _cy, isTouch) => this.tryPickPending(x, y, isTouch);
+    this.scene.dragStart = (x, y) => this.tryPickPending(x, y);
     this.scene.dragMove = (x, y, cx, cy) => this.onPickedMove(x, y, cx, cy);
     this.scene.dragEnd = (x, y, cx, cy) => this.onPickedRelease(x, y, cx, cy);
+    // When the scene auto-pans the camera during a drag, the cell under the
+    // finger shifts even though the finger hasn't moved — re-resolve the ghost
+    // from the cached client point so it tracks the world correctly.
+    this.scene.onAutoPan = (cx, cy) => this.updateGhostFromClient(cx, cy);
     // Floating rotate icon on the board → rotate the most recent pending.
     this.scene.rotateRequestHandler = () => this.rotate();
 
@@ -109,10 +130,12 @@ export class GameUI {
     saveActive(this.game.toSnapshot()); // auto-save at each turn boundary
     const p = this.game.currentPlayer;
     if (p.isBot) {
-      this.setStatus(`${p.name} is planning…`);
+      this.setStatus(`${p.animal} ${p.name} is planning…`);
       this.renderHand(true);
       this.updateButtons();
-      this.botTimer = window.setTimeout(() => this.botMove(), 480);
+      this.setBotThinking(true); // amber glow on the active chip while it ponders
+      // Tiny beat so "planning…" paints before the (synchronous) search runs.
+      this.botTimer = window.setTimeout(() => this.botMove(), this.reduceMotion ? 40 : 90);
       return;
     }
     // human
@@ -129,55 +152,119 @@ export class GameUI {
   private botMove(): void {
     this.botTimer = null;
     if (!this.alive || this.game.gameOver || !this.game.currentPlayer.isBot) return;
-    const move = chooseAiMove(this.game);
-    if (!this.alive) return; // torn down while the (synchronous) search ran
+    void this.runBotTurn();
+  }
+
+  /** Drive one bot turn: search, then a tier-flavoured "planning" beat (with
+   *  the AI's actual search latency absorbed so the felt think-time stays
+   *  consistent), then the animated lay — or a pass if it's stuck. */
+  private async runBotTurn(): Promise<void> {
     const actor = this.game.currentPlayer;
+    const t0 = performance.now();
+    const move = chooseAiMove(this.game);
+    if (!this.alive || this.game.currentPlayer !== actor) return;
     if (!move) {
+      // Brief beat before the pass callout so it doesn't snap past.
+      await this.botDelay(this.reduceMotion ? 150 : 420);
+      if (!this.alive || this.game.currentPlayer !== actor) return;
+      this.setBotThinking(false);
       this.game.pass();
       callout(`${actor.animal} ${actor.name} passes`, "pass");
       this.syncScene();
       this.beginTurn();
       return;
     }
-    // Lay each tile visibly with a short pause between, so the human can
-    // see the bot "playing" instead of all tiles popping in at once.
-    void this.botLayMoveAnimated(move, actor);
+    // Hold the planning beat for the remainder of the tier budget that the
+    // search didn't already eat (harder AIs deliberate visibly longer). An
+    // expert gets a one-off longer ponder on its very first move of the game.
+    let budget = this.botThinkBudget(actor.difficulty);
+    if (actor.difficulty === "expert" && !this.pondered.has(actor.id) && !this.reduceMotion) {
+      budget += 700;
+    }
+    this.pondered.add(actor.id);
+    const remaining = budget - (performance.now() - t0);
+    if (remaining > 0) await this.botDelay(remaining);
+    if (!this.alive || this.game.currentPlayer !== actor) return;
+    await this.botLayMoveAnimated(move, actor);
+  }
+
+  /** Toggle the "thinking" amber glow on the current active player chip.
+   *  Skipped under reduced motion. The class is naturally cleared when
+   *  renderHud() rebuilds the chips at the next turn boundary. */
+  private setBotThinking(on: boolean): void {
+    const chip = this.root.querySelector(".pchip.active");
+    if (chip) chip.classList.toggle("thinking", on && !this.reduceMotion);
+  }
+
+  /** Felt "thinking" budget (ms) from search-start to the first hedge landing,
+   *  by difficulty — easy is impulsive, expert deliberates. A little organic
+   *  jitter keeps successive turns from feeling metronomic. */
+  private botThinkBudget(difficulty: Difficulty): number {
+    if (this.reduceMotion) return 200;
+    const base = { easy: 380, medium: 650, hard: 850, expert: 1100 }[difficulty] ?? 650;
+    return Math.round(base * (0.9 + Math.random() * 0.2)); // ±10%
+  }
+
+  /** Cancellable delay used between bot placement beats. Parks the handle in
+   *  botTimer so a teardown (dispose) cancels any in-flight wait. */
+  private botDelay(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.botTimer = window.setTimeout(() => {
+        this.botTimer = null;
+        resolve();
+      }, ms);
+    });
   }
 
   /** Animated bot placement: each tile of the move is appended to `pending`
-   *  in sequence (~360ms apart) with a `place` sfx + the renderer's pop-in,
-   *  then the whole move is committed atomically once the visualisation
-   *  finishes. The engine state isn't touched until commit, so a teardown
-   *  mid-animation cleanly aborts. */
+   *  in sequence with a `place` sfx, the renderer's pop-in, and a connect-ring
+   *  + chime when it abuts a matching neighbour — same feedback the human gets.
+   *  The whole move is then committed atomically; a beat is held afterwards so
+   *  the placement (and any scoring celebration) reads before the turn passes.
+   *  The engine state isn't touched until commit, so a mid-animation teardown
+   *  cleanly aborts. */
   private async botLayMoveAnimated(move: Move, actor: { name: string; animal: string; colour?: string }): Promise<void> {
     this.busy = true;
-    const STEP_MS = 360;
+    this.setBotThinking(false); // done deliberating — it's laying now
+    const rm = this.reduceMotion;
+    const STEP_MS = rm ? 150 : 480; // gap between successive hedges in a multi-tile lay
     for (let i = 0; i < move.tiles.length; i++) {
       if (!this.alive) return;
       if (this.game.currentPlayer !== actor) return; // turn changed under us
       const t = move.tiles[i];
-      this.pending.push({ tileId: t.tileId, cells: t.cells.map((c) => ({ ...c })) });
+      const cells = t.cells.map((c) => ({ ...c }));
+      this.pending.push({ tileId: t.tileId, cells });
       this.pendingOri.push(0); // orientation doesn't matter for the visualisation
       sfx.place();
       this.syncScene();
-      if (i < move.tiles.length - 1) {
-        await new Promise<void>((resolve) => {
-          this.botTimer = window.setTimeout(() => {
-            this.botTimer = null;
-            resolve();
-          }, STEP_MS);
-        });
+      // Reward connections the same way a human placement does — a ring flash +
+      // chime on cells that just clicked into a matching-colour neighbour.
+      const hits = this.connectingCells(cells, t.tileId);
+      if (hits.length > 0) {
+        sfx.connect();
+        this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
       }
+      if (i < move.tiles.length - 1) await this.botDelay(STEP_MS);
     }
+    if (!this.alive) return;
+    // Let the last tile's pop-in settle before committing.
+    await this.botDelay(rm ? 100 : 400);
     if (!this.alive) return;
     // Clear the visualisation pending and commit the real move so scoring,
     // streaks, and end-of-game checks all run against engine state.
     this.pending = [];
     this.pendingOri = [];
     const res = this.game.commit(move);
-    this.busy = false;
     this.afterCommit(res, actor);
     this.syncScene();
+    // Hold on the result before handing the turn on — a sealed field savours
+    // longer, scaling a touch with the size of the haul (capped), so a big
+    // enclosure lands before the next hand flies in.
+    const scored = res.scored ?? 0;
+    const hold = rm ? 250 : scored > 0 ? Math.min(1600, 760 + scored * 110) : 460;
+    await this.botDelay(hold);
+    if (!this.alive) return;
+    this.busy = false;
     this.beginTurn();
   }
 
@@ -334,7 +421,7 @@ export class GameUI {
   /** Pointerdown on a board cell — if it's part of a pending tile, pick it
    *  up (remove from pending, set as selected, remember origin). Returns
    *  true to claim the gesture; false to let the scene pan as normal. */
-  private tryPickPending(x: number, y: number, isTouch: boolean): boolean {
+  private tryPickPending(x: number, y: number): boolean {
     if (this.busy || this.game.currentPlayer.isBot) return false;
     if (this.pickedOrigin !== null) return false;
     const idx = this.pending.findIndex((p) => p.cells.some((c) => c.x === x && c.y === y));
@@ -345,21 +432,20 @@ export class GameUI {
     this.selectedId = placement.tileId;
     this.oriIndex = oriIdx;
     this.pickedOrigin = { placement, oriIdx };
-    this.scene.setTouchGhostOffset(isTouch); // lift above finger on mobile
+    this.dragging = true;
+    // Keep the grabbed point under the finger so the tile stays exactly where it
+    // was on pickup (no anchor-snap, no lift jump). It then tracks the finger
+    // 1:1. No touch lift on a re-drag — the tile is already visible on the board
+    // and the player expects it to sit still until they move it.
+    const anchor = placement.cells[0];
+    this.grabOffset = { dx: x - anchor.x, dy: y - anchor.y };
+    this.scene.setTouchGhostOffset(false);
     this.clearDanger();
     sfx.pickup();
     this.syncScene();
     this.renderHand(false);
     this.updateButtons();
-    // Initial ghost preview: lift up by tile-span + 1 (no flip — the
-    // subsequent dragMove path will re-resolve with the proper flip logic).
-    if (isTouch) {
-      const span = this.tileSpanCells();
-      this.scene.setFingerMarker({ x, y });
-      this.onHover(x, y - span - 1);
-    } else {
-      this.onHover(x, y);
-    }
+    this.onHover(x, y); // ghost overlays the tile exactly where it sat
     return true;
   }
 
@@ -371,22 +457,33 @@ export class GameUI {
   }
 
   private onPickedMove(x: number, y: number, clientX: number, clientY: number): void {
+    this.updateGhostFromClient(clientX, clientY);
+    void x;
+    void y;
+  }
+
+  /** Shared ghost/finger-marker update from a raw client point. Used by both
+   *  drag entry points (hand-chip drag, board-pickup drag) AND by the scene's
+   *  auto-pan callback — whenever the camera moves, the cell under the cached
+   *  finger position changes and the ghost must follow. */
+  private updateGhostFromClient(clientX: number, clientY: number): void {
     if (!this.scene.pointOverBoard(clientX, clientY)) {
       // Drifted off the board — clear the ghost; release here will un-play.
       this.scene.setGhost(null, false);
       this.scene.setFingerMarker(null);
       return;
     }
-    // Re-resolve the lifted target from the current finger position so the
-    // ghost follows the finger (with the lift offset applied for touch).
     const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.tileSpanCells());
-    this.scene.setFingerMarker({ x: finger[0], y: finger[1] });
+    // The finger dot only makes sense when the ghost is lifted away from the
+    // finger (touch hand-placement). On a flush drag the ghost sits at the
+    // finger, so the dot would just sit under it — skip it.
+    const lifted = target[0] !== finger[0] || target[1] !== finger[1];
+    this.scene.setFingerMarker(lifted ? { x: finger[0], y: finger[1] } : null);
     this.onHover(target[0], target[1]);
-    void x;
-    void y;
   }
 
   private onPickedRelease(x: number, y: number, clientX: number, clientY: number): void {
+    this.dragging = false;
     if (this.selectedId == null) return;
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
@@ -413,8 +510,10 @@ export class GameUI {
       if (chip) gsap.fromTo(chip, { scale: 0.4, y: -22 }, { scale: 1, y: 0, duration: 0.42, ease: "back.out(2.4)" });
       return;
     }
-    const tx = lifted!.target[0];
-    const ty = lifted!.target[1];
+    // Land where the ghost sat — back out the grab offset so the anchor lands
+    // such that the grabbed point is under the finger (WYSIWYG with the preview).
+    const tx = lifted!.target[0] - this.grabOffset.dx;
+    const ty = lifted!.target[1] - this.grabOffset.dy;
     const [dir, flip] = ALL_ORI[this.oriIndex];
     const cells = orient(tile, tx, ty, dir, flip);
     void x;
@@ -459,10 +558,14 @@ export class GameUI {
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
     const [dir, flip] = ALL_ORI[this.oriIndex];
-    const cells = orient(tile, x, y, dir, flip);
+    // (x,y) is where the grabbed point should land — back out the grab offset to
+    // get the anchor so the tile keeps its position relative to the finger.
+    const cells = orient(tile, x - this.grabOffset.dx, y - this.grabOffset.dy, dir, flip);
     // Ghost colour reflects only whether the tile fits physically. Adjacency
-    // / colour rules are deferred to Confirm.
-    const valid = !this.overlapsOccupied(cells);
+    // / colour rules are deferred to Confirm. Mid-drag we always render valid
+    // so the ghost doesn't strobe red as it crosses occupied cells — drop-time
+    // validation (bray + bounce-back / flashInvalid) carries the "no" signal.
+    const valid = this.dragging ? true : !this.overlapsOccupied(cells);
     this.scene.setGhost(cells, valid);
   }
 
@@ -478,6 +581,7 @@ export class GameUI {
     if (this.pending.length >= MAX_LAY) return; // at most 3 hedges per turn
     const becomingSelected = this.selectedId !== id;
     this.selectedId = becomingSelected ? id : null;
+    this.grabOffset = { dx: 0, dy: 0 }; // fresh placement anchors at the finger
     // The orientation NEVER changes silently between picks. The player
     // controls rotation via the Rotate button. If the current orientation
     // has no legal placements for this tile, every cell will read red and
@@ -746,6 +850,8 @@ export class GameUI {
       if (!dragging) {
         if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_SLOP) return;
         dragging = true;
+        this.dragging = true; // suppress mid-drag ghost validity flicker
+        this.grabOffset = { dx: 0, dy: 0 }; // from-hand: anchor sits at the finger
         // Touch drag → lift the ghost above the finger so it isn't occluded.
         this.scene.setTouchGhostOffset(e.pointerType === "touch");
         // commit to the drag: select this tile so the ghost-preview path is live.
@@ -757,21 +863,18 @@ export class GameUI {
           this.updateButtons();
         }
       }
-      // ghost-preview at the LIFTED position (touch) or finger cell (mouse)
-      if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
-        const { target, finger } = this.scene.liftedCellAt(e.clientX, e.clientY, this.tileSpanCells());
-        this.scene.setFingerMarker({ x: finger[0], y: finger[1] });
-        this.onHover(target[0], target[1]);
-      } else {
-        this.scene.setGhost(null, false);
-        this.scene.setFingerMarker(null);
-      }
+      // Feed the scene so edge-auto-pan can fire while the finger lingers near
+      // a canvas edge — the scene no-ops the pan when the point is off-canvas.
+      this.scene.setDragClient(e.clientX, e.clientY);
+      this.updateGhostFromClient(e.clientX, e.clientY);
     });
     const finish = (e: PointerEvent) => {
       if (!pressed) return;
       const wasDrag = dragging;
       pressed = false;
       dragging = false;
+      this.dragging = false;
+      this.scene.setDragClient(null); // disarm edge-auto-pan
       try {
         d.releasePointerCapture(pid);
       } catch {
@@ -882,6 +985,8 @@ export class GameUI {
     this.usedIds.clear();
     this.selectedId = null;
     this.oriIndex = 1;
+    this.dragging = false;
+    this.grabOffset = { dx: 0, dy: 0 };
     this.scene.setHighlights(new Map());
     this.scene.setGhost(null, false);
   }
