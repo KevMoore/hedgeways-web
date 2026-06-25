@@ -357,11 +357,12 @@ body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  /* Block browser gestures inside the game (scroll/zoom/pull-to-refresh).
-     The hand chips and canvas already have their own touch-action:none, but
-     this also covers the gaps between elements so a stray finger never
-     triggers a scroll. Form controls inside .game don't exist. */
-  touch-action: none;
+  /* Disable double-tap-zoom (kills the iOS 300ms click delay) but still let
+     clicks dispatch on child controls. The hand chips and canvas declare
+     their own `touch-action: none` so they fully own their gestures.
+     `touch-action: none` on the whole container suppresses click synthesis
+     on touch in some browsers (Confirm/Undo needed two taps to fire). */
+  touch-action: manipulation;
 }
 .hud {
   display: flex;

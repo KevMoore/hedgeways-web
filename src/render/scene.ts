@@ -51,10 +51,13 @@ export class Scene {
   private connectFlash = new Map<string, number>();
   private CONNECT_FLASH_MS = 600;
   private ghost: Ghost | null = null;
-  /** When true, render the drag ghost OFFSET above the touch point with a
-   *  small target ring at the actual finger cell — fixes mobile "fat finger
-   *  hides the tile" occlusion. Toggled by game-ui only for touch drags. */
+  /** When true, mobile touch drags are in "lifted" mode — game-ui passes
+   *  ghost cells that sit above the finger, and a subtle dot is drawn at
+   *  the finger position. The lift math (cell offset) is exposed via
+   *  liftedCellAt() so game-ui's input handlers and the renderer agree. */
   private touchGhostOffset = false;
+  /** Finger cell to draw a small "you are here" dot during a touch drag. */
+  private fingerMarker: { x: number; y: number } | null = null;
   private highlights = new Map<string, Colour>(); // cell -> colour of the hedge segment that could sit there
   private flash = new Map<string, number>(); // cell -> start time
   private placedAt = new Map<string, number>(); // cell -> placement time (pop-in anim)
@@ -410,8 +413,34 @@ export class Scene {
   setTouchGhostOffset(on: boolean): void {
     if (this.touchGhostOffset !== on) {
       this.touchGhostOffset = on;
+      if (!on) this.fingerMarker = null;
       this.needsDraw = true;
     }
+  }
+
+  /** Game-ui sets the finger cell during a touch drag so the renderer can
+   *  draw a small "you are here" dot offset from the lifted ghost. */
+  setFingerMarker(cell: { x: number; y: number } | null): void {
+    this.fingerMarker = cell;
+    this.needsDraw = true;
+  }
+
+  /** Convert client coords to the cell where the LIFTED ghost should sit.
+   *  When touch-mode is off, this is just the finger cell. When on, the
+   *  ghost is lifted by tileSpanCells + 1 cells (up by default, down if the
+   *  finger is near the top edge of the canvas). */
+  liftedCellAt(clientX: number, clientY: number, tileSpanCells: number): {
+    target: [number, number];
+    finger: [number, number];
+  } {
+    const [fx, fy] = this.cellAtClient(clientX, clientY);
+    if (!this.touchGhostOffset) return { target: [fx, fy], finger: [fx, fy] };
+    const rect = this.canvas.getBoundingClientRect();
+    const fingerScreenY = clientY - rect.top;
+    const lift = Math.max(2, tileSpanCells + 1); // cells of separation
+    const flipDown = fingerScreenY < rect.height * 0.3;
+    const targetY = flipDown ? fy + lift : fy - lift;
+    return { target: [fx, targetY], finger: [fx, fy] };
   }
 
   setGhost(cells: PlacedCell[] | null, valid: boolean): void {
@@ -875,23 +904,6 @@ export class Scene {
       const pulse = (Math.sin(now / 220) + 1) / 2; // 0..1
       const ghostAlpha = this.ghost.valid ? 0.5 + pulse * 0.25 : 0.4;
       const ghostScale = this.ghost.valid ? 0.97 + pulse * 0.06 : 1;
-      // On touch, lift the ghost above the finger so it isn't occluded.
-      // The lift = full tile-vertical span + a thumb-clear buffer, so even a
-      // 3-cell vertical tile sits ENTIRELY above the finger. If the anchor
-      // is in the top ~30% of the canvas the offset flips downward so the
-      // ghost stays on screen when dragging near the top edge.
-      let offsetPx = 0;
-      if (this.touchGhostOffset) {
-        const anchor = this.ghost.cells[0];
-        const [, ay] = this.worldToScreen(anchor.x, anchor.y);
-        const vh = this.canvas.height / this.dpr;
-        const ys = this.ghost.cells.map((c) => c.y);
-        const spanCells = Math.max(...ys) - Math.min(...ys) + 1;
-        const liftAbs = Math.max(110, spanCells * this.scale + 36);
-        offsetPx = ay < vh * 0.3 ? liftAbs : -liftAbs;
-      }
-      ctx.save();
-      if (offsetPx !== 0) ctx.translate(0, offsetPx);
       for (const c of this.ghost.cells) {
         const mask =
           (hasHedge(c.x, c.y - 1) ? 1 : 0) |
@@ -900,10 +912,11 @@ export class Scene {
           (hasHedge(c.x - 1, c.y) ? 8 : 0);
         this.drawHedge(c.x, c.y, c.colour, ghostAlpha, !this.ghost.valid, ghostScale, mask);
       }
-      ctx.restore();
-      // target marker at the actual finger cell (only when offset is on)
-      if (this.touchGhostOffset) this.drawTargetRing(this.ghost.cells[0], this.ghost.valid);
     }
+    // Touch finger indicator — small ring at the actual finger cell during a
+    // touch drag, so the player can tell where their finger is even though
+    // the placement target is the lifted ghost above.
+    if (this.fingerMarker) this.drawFingerDot(this.fingerMarker);
 
     // floating "+N acres" pops
     this.acrePops = this.acrePops.filter((p) => now - p.t0 < ACRE_POP_MS);
@@ -963,38 +976,25 @@ export class Scene {
   }
 
   /** Draw a chunky "rotate" disc with a circular arrow. Tappable hit-target. */
-  /** Target ring + crosshair at a cell's centre — shown under the finger
-   *  during a touch drag so the player can see where the lifted ghost will
-   *  land. Pulses gently to stay visible around finger occlusion. */
-  private drawTargetRing(cell: { x: number; y: number }, valid: boolean): void {
+  /** Subtle "you are here" dot at the finger cell during a touch drag. The
+   *  placement target is the LIFTED ghost, not the finger — this dot is
+   *  just a positional hint so the player knows where their finger sits
+   *  relative to where the ghost ends up. */
+  private drawFingerDot(cell: { x: number; y: number }): void {
     const ctx = this.ctx;
     const [sx, sy] = this.worldToScreen(cell.x, cell.y);
     const cx = sx + this.scale / 2;
     const cy = sy + this.scale / 2;
-    const pulse = (Math.sin(performance.now() / 220) + 1) / 2; // 0..1
-    const r = Math.max(14, this.scale * 0.32) * (0.92 + pulse * 0.18);
-    const stroke = valid ? "#ffd34d" : "#e0524d";
-    const fillRGBA = valid ? "rgba(255,211,77," : "rgba(224,82,77,";
+    const r = Math.max(7, this.scale * 0.14);
     ctx.save();
-    // outer halo (large, dim, attention-grabbing around the finger)
-    ctx.fillStyle = `${fillRGBA}${0.18 + pulse * 0.12})`;
+    ctx.fillStyle = "rgba(80,80,90,0.22)";
     ctx.beginPath();
-    ctx.arc(cx, cy, r * 1.7, 0, Math.PI * 2);
+    ctx.arc(cx, cy, r * 1.6, 0, Math.PI * 2);
     ctx.fill();
-    // ring
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = Math.max(3, r * 0.22);
+    ctx.fillStyle = "rgba(50,50,60,0.5)";
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-    // crosshair
-    ctx.lineWidth = Math.max(2, r * 0.16);
-    ctx.beginPath();
-    ctx.moveTo(cx - r * 0.45, cy);
-    ctx.lineTo(cx + r * 0.45, cy);
-    ctx.moveTo(cx, cy - r * 0.45);
-    ctx.lineTo(cx, cy + r * 0.45);
-    ctx.stroke();
+    ctx.fill();
     ctx.restore();
   }
 

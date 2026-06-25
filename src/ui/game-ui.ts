@@ -351,17 +351,39 @@ export class GameUI {
     this.syncScene();
     this.renderHand(false);
     this.updateButtons();
-    this.onHover(x, y);
+    // Initial ghost preview: lift up by tile-span + 1 (no flip — the
+    // subsequent dragMove path will re-resolve with the proper flip logic).
+    if (isTouch) {
+      const span = this.tileSpanCells();
+      this.scene.setFingerMarker({ x, y });
+      this.onHover(x, y - span - 1);
+    } else {
+      this.onHover(x, y);
+    }
     return true;
+  }
+
+  /** Vertical span (in cells) of the current tile at the current oriIndex.
+   *  Used to size the touch lift so a 3-cell tall vertical tile sits fully
+   *  above the finger and a 1-cell horizontal one gets a comfortable gap. */
+  private tileSpanCells(): number {
+    return ALL_ORI[this.oriIndex][0] === "V" ? 3 : 1;
   }
 
   private onPickedMove(x: number, y: number, clientX: number, clientY: number): void {
     if (!this.scene.pointOverBoard(clientX, clientY)) {
       // Drifted off the board — clear the ghost; release here will un-play.
       this.scene.setGhost(null, false);
+      this.scene.setFingerMarker(null);
       return;
     }
-    this.onHover(x, y);
+    // Re-resolve the lifted target from the current finger position so the
+    // ghost follows the finger (with the lift offset applied for touch).
+    const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.tileSpanCells());
+    this.scene.setFingerMarker({ x: finger[0], y: finger[1] });
+    this.onHover(target[0], target[1]);
+    void x;
+    void y;
   }
 
   private onPickedRelease(x: number, y: number, clientX: number, clientY: number): void {
@@ -369,6 +391,7 @@ export class GameUI {
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
     this.scene.setTouchGhostOffset(false); // touch drag ending — back to flush
+    this.scene.setFingerMarker(null);
     // Released anywhere off the board canvas — un-play. Tile returns to hand
     // with its current orientation preserved so the next pick keeps it.
     if (!this.scene.pointOverBoard(clientX, clientY)) {
@@ -385,8 +408,15 @@ export class GameUI {
       if (chip) gsap.fromTo(chip, { scale: 0.4, y: -22 }, { scale: 1, y: 0, duration: 0.42, ease: "back.out(2.4)" });
       return;
     }
+    // Resolve the lifted target: x/y from scene's dragEnd are the FINGER
+    // cell — when in touch-lift mode the actual drop is up the column.
+    const lifted = this.scene.liftedCellAt(clientX, clientY, this.tileSpanCells());
+    const tx = lifted.target[0];
+    const ty = lifted.target[1];
     const [dir, flip] = ALL_ORI[this.oriIndex];
-    const cells = orient(tile, x, y, dir, flip);
+    const cells = orient(tile, tx, ty, dir, flip);
+    void x;
+    void y;
     if (this.overlapsOccupied(cells)) {
       // Bray + restore to original position.
       const orig = this.pickedOrigin;
@@ -725,12 +755,14 @@ export class GameUI {
           this.updateButtons();
         }
       }
-      // ghost-preview at the finger position (only while over the board)
+      // ghost-preview at the LIFTED position (touch) or finger cell (mouse)
       if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
-        const [cx, cy] = this.scene.cellAtClient(e.clientX, e.clientY);
-        this.onHover(cx, cy);
+        const { target, finger } = this.scene.liftedCellAt(e.clientX, e.clientY, this.tileSpanCells());
+        this.scene.setFingerMarker({ x: finger[0], y: finger[1] });
+        this.onHover(target[0], target[1]);
       } else {
         this.scene.setGhost(null, false);
+        this.scene.setFingerMarker(null);
       }
     });
     const finish = (e: PointerEvent) => {
@@ -739,6 +771,7 @@ export class GameUI {
       pressed = false;
       dragging = false;
       this.scene.setTouchGhostOffset(false);
+      this.scene.setFingerMarker(null);
       try {
         d.releasePointerCapture(pid);
       } catch {
@@ -748,10 +781,10 @@ export class GameUI {
         this.selectTile(tileId); // short tap toggles selection
         return;
       }
-      // Drag release: place if over a valid board cell, else abort
+      // Drag release: place at the LIFTED target if over the board, else abort
       if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
-        const [cx, cy] = this.scene.cellAtClient(e.clientX, e.clientY);
-        this.onTapCell(cx, cy); // places, or flashInvalid + donkey
+        const { target } = this.scene.liftedCellAt(e.clientX, e.clientY, this.tileSpanCells());
+        this.onTapCell(target[0], target[1]); // places, or flashInvalid + donkey
       } else {
         this.scene.setGhost(null, false); // off-board: silent abort
       }
