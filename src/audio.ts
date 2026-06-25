@@ -228,6 +228,11 @@ export const sfx = {
 		tone(380, 0.06, 'sine', 0.06);
 		tone(280, 0.08, 'sine', 0.05, 0.04);
 	},
+	/** Soft tile-drawn-from-bag tap — fires per tile in a staggered burst
+	 *  when new hedges fly into the hand at turn start. */
+	deal() {
+		tone(820 + Math.random() * 80, 0.05, 'triangle', 0.06);
+	},
 	invalid() {
 		// Cartoony donkey "hee-haw" for an illegal move — a saw-tone rising "hee"
 		// followed immediately by a falling "haw". Sample at /audio/animals/donkey.mp3

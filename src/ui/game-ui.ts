@@ -53,6 +53,9 @@ export class GameUI {
   /** when a board pending is picked up via drag, remember where it came from
    *  so we can restore on cancel / invalid drop */
   private pickedOrigin: { placement: PlacedTile; oriIdx: number } | null = null;
+  /** Per-player snapshot of hand tile ids on the last renderHand — used to
+   *  detect which tiles are NEW so they can fly in from the bag. */
+  private lastHandIds = new Map<number, Set<number>>();
 
   private onQuit: (() => void) | null;
   private onRestart: ((config: GameConfig) => void) | null;
@@ -619,6 +622,8 @@ export class GameUI {
       el.innerHTML = `<div class="hand-hidden">${p.name}'s hedges</div>`;
       return;
     }
+    const prev = this.lastHandIds.get(p.id) ?? new Set<number>();
+    const freshChips: HTMLElement[] = [];
     for (const tile of p.hand) {
       const d = document.createElement("button");
       d.className = "tile";
@@ -633,9 +638,45 @@ export class GameUI {
       }
       this.attachTileInput(d, tile.id);
       el.appendChild(d);
+      if (!prev.has(tile.id)) freshChips.push(d);
     }
-    if (animate)
-      gsap.from([...el.children], { y: 14, opacity: 0, duration: 0.32, ease: "back.out(2)", stagger: 0.05 });
+    this.lastHandIds.set(p.id, new Set(p.hand.map((t) => t.id)));
+    if (animate) this.flyTilesFromBag(freshChips);
+  }
+
+  /** Animate fresh hand chips flying from the bag icon into their slots —
+   *  staggered, springy, with a soft "deal" tap per tile. The whole turn-
+   *  start render uses this when `animate=true`. */
+  private flyTilesFromBag(freshChips: HTMLElement[]): void {
+    if (freshChips.length === 0) return;
+    const bag = this.root.querySelector(".bag") as HTMLElement | null;
+    if (!bag) return;
+    const bagRect = bag.getBoundingClientRect();
+    if (bagRect.width === 0) return; // bag hidden (e.g. mobile collapse) — skip
+    const bagCx = bagRect.left + bagRect.width / 2;
+    const bagCy = bagRect.top + bagRect.height / 2;
+    freshChips.forEach((chip, i) => {
+      const r = chip.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const dx = bagCx - cx;
+      const dy = bagCy - cy;
+      gsap.fromTo(
+        chip,
+        { x: dx, y: dy, scale: 0.3, rotation: -200, opacity: 0 },
+        {
+          x: 0,
+          y: 0,
+          scale: 1,
+          rotation: 0,
+          opacity: 1,
+          duration: 0.55,
+          ease: "back.out(1.8)",
+          delay: i * 0.11,
+          onStart: () => sfx.deal(),
+        },
+      );
+    });
   }
 
   /**
