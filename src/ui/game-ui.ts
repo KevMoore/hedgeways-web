@@ -390,11 +390,16 @@ export class GameUI {
     if (this.selectedId == null) return;
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
+    // Resolve the lifted target BEFORE clearing the offset flag — liftedCellAt
+    // reads `touchGhostOffset` to know whether to apply the lift. If we clear
+    // first the tile drops at the finger cell, not the ghost cell.
+    const overBoard = this.scene.pointOverBoard(clientX, clientY);
+    const lifted = overBoard ? this.scene.liftedCellAt(clientX, clientY, this.tileSpanCells()) : null;
     this.scene.setTouchGhostOffset(false); // touch drag ending — back to flush
     this.scene.setFingerMarker(null);
     // Released anywhere off the board canvas — un-play. Tile returns to hand
     // with its current orientation preserved so the next pick keeps it.
-    if (!this.scene.pointOverBoard(clientX, clientY)) {
+    if (!overBoard) {
       const tileId = this.selectedId;
       this.pickedOrigin = null;
       this.selectedId = null;
@@ -408,11 +413,8 @@ export class GameUI {
       if (chip) gsap.fromTo(chip, { scale: 0.4, y: -22 }, { scale: 1, y: 0, duration: 0.42, ease: "back.out(2.4)" });
       return;
     }
-    // Resolve the lifted target: x/y from scene's dragEnd are the FINGER
-    // cell — when in touch-lift mode the actual drop is up the column.
-    const lifted = this.scene.liftedCellAt(clientX, clientY, this.tileSpanCells());
-    const tx = lifted.target[0];
-    const ty = lifted.target[1];
+    const tx = lifted!.target[0];
+    const ty = lifted!.target[1];
     const [dir, flip] = ALL_ORI[this.oriIndex];
     const cells = orient(tile, tx, ty, dir, flip);
     void x;
@@ -770,22 +772,29 @@ export class GameUI {
       const wasDrag = dragging;
       pressed = false;
       dragging = false;
-      this.scene.setTouchGhostOffset(false);
-      this.scene.setFingerMarker(null);
       try {
         d.releasePointerCapture(pid);
       } catch {
         /* ignore */
       }
       if (!wasDrag) {
+        this.scene.setTouchGhostOffset(false);
+        this.scene.setFingerMarker(null);
         this.selectTile(tileId); // short tap toggles selection
         return;
       }
-      // Drag release: place at the LIFTED target if over the board, else abort
+      // IMPORTANT: resolve the lifted target BEFORE clearing the offset flag
+      // — liftedCellAt depends on `touchGhostOffset` to know whether to
+      // shift up. Clearing first would make it return the bare finger cell
+      // and the tile would drop where the finger is, not where the ghost is.
       if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
         const { target } = this.scene.liftedCellAt(e.clientX, e.clientY, this.tileSpanCells());
+        this.scene.setTouchGhostOffset(false);
+        this.scene.setFingerMarker(null);
         this.onTapCell(target[0], target[1]); // places, or flashInvalid + donkey
       } else {
+        this.scene.setTouchGhostOffset(false);
+        this.scene.setFingerMarker(null);
         this.scene.setGhost(null, false); // off-board: silent abort
       }
       this.renderHand(false);
