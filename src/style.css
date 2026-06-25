@@ -945,21 +945,33 @@ body {
   .hud .brand {
     display: none; /* reclaim width on mobile (logo lives on the start screen) */
   }
+  /* Scores get their own full-width row, laid out as one equal column per
+     farmer — so 3-4 players sit in a single 1xN row instead of being squeezed
+     into a vertical stack by the bag + icon controls beside them. */
   .players {
-    gap: 5px;
-    flex: 1;
+    flex-basis: 100%;
+    display: grid;
+    grid-template-columns: repeat(var(--pcols, 4), 1fr);
+    gap: 4px;
   }
   .pchip {
     font-size: 12px;
-    padding: 3px 7px;
-    gap: 5px;
+    padding: 3px 5px;
+    gap: 4px;
     border-left-width: 3px;
+    min-width: 0; /* allow the chip to shrink within its grid column */
+    justify-content: center;
+    overflow: hidden;
   }
   .pchip .pname {
     display: none; /* animal + colour accent already identify the farmer */
   }
   .pchip .pscore {
     font-size: 14px;
+    white-space: nowrap;
+  }
+  .pchip .pbonus {
+    font-size: 10px;
   }
   .bag {
     font-size: 11px;
