@@ -198,6 +198,18 @@ export const sfx = {
   rotate() {
     tone(380, 0.05, "square", 0.05);
   },
+  /** Tiny ascending two-note chime — played when a placed hedge sits next to
+   *  a matching-colour neighbour ("it clicked into place"). */
+  connect() {
+    tone(660, 0.07, "triangle", 0.09);
+    tone(990, 0.09, "triangle", 0.07, 0.05);
+  },
+  /** Soft reverse-pickup tone — played when a tile is dragged back to the
+   *  hand and "un-played". */
+  unplay() {
+    tone(380, 0.06, "sine", 0.06);
+    tone(280, 0.08, "sine", 0.05, 0.04);
+  },
   invalid() {
     // Cartoony donkey "hee-haw" for an illegal move — a saw-tone rising "hee"
     // followed immediately by a falling "haw". Sample at /audio/animals/donkey.mp3

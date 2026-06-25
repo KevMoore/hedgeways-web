@@ -81,7 +81,6 @@ export class GameUI {
     // Floating rotate icon on the board → rotate the most recent pending.
     this.scene.rotateRequestHandler = () => this.rotate();
 
-    root.querySelector("#btn-rotate")!.addEventListener("click", () => this.rotate());
     root.querySelector("#btn-undo")!.addEventListener("click", () => this.undo());
     root.querySelector("#btn-confirm")!.addEventListener("click", () => this.confirm());
     root.querySelector("#btn-pass")!.addEventListener("click", () => this.passTurn());
@@ -238,6 +237,57 @@ export class GameUI {
     this.syncScene(); // refreshes rotate icon + status from pending
     this.renderHand(false);
     this.updateButtons();
+    // If any cell of the new tile sits next to a matching-colour neighbour
+    // (committed or pending), reward the player with a chime + ring flash.
+    const hits = this.connectingCells(cells, tile.id);
+    if (hits.length > 0) {
+      sfx.connect();
+      this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
+    }
+  }
+
+  /** Return the cells of a freshly-placed tile whose colour matches at least
+   *  one orthogonally-adjacent neighbour cell (committed tile OR another
+   *  pending tile, excluding the tile being placed itself). */
+  private connectingCells(placedCells: PlacedTile["cells"], placedTileId: number): PlacedTile["cells"] {
+    const out: PlacedTile["cells"] = [];
+    const ownKeys = new Set(placedCells.map((c) => key(c.x, c.y)));
+    for (const c of placedCells) {
+      const here = c.colour;
+      const neighbours = [
+        [c.x + 1, c.y],
+        [c.x - 1, c.y],
+        [c.x, c.y + 1],
+        [c.x, c.y - 1],
+      ] as const;
+      for (const [nx, ny] of neighbours) {
+        const nk = key(nx, ny);
+        if (ownKeys.has(nk)) continue;
+        // committed tile?
+        const committed = this.game.board.cells.get(nk);
+        if (committed && committed.colour === here) {
+          out.push(c);
+          break;
+        }
+        // another pending?
+        let matched = false;
+        for (const p of this.pending) {
+          if (p.tileId === placedTileId) continue;
+          for (const pc of p.cells) {
+            if (pc.x === nx && pc.y === ny && pc.colour === here) {
+              matched = true;
+              break;
+            }
+          }
+          if (matched) break;
+        }
+        if (matched) {
+          out.push(c);
+          break;
+        }
+      }
+    }
+    return out;
   }
 
   /** Pointerdown on a board cell — if it's part of a pending tile, pick it
@@ -279,12 +329,17 @@ export class GameUI {
     // Released anywhere off the board canvas — un-play. Tile returns to hand
     // with its current orientation preserved so the next pick keeps it.
     if (!this.scene.pointOverBoard(clientX, clientY)) {
+      const tileId = this.selectedId;
       this.pickedOrigin = null;
       this.selectedId = null;
       this.scene.setGhost(null, false);
       this.syncScene();
       this.renderHand(false);
       this.updateButtons();
+      sfx.unplay();
+      // Bounce the returning chip so it's obvious the tile is back in hand.
+      const chip = this.root.querySelector<HTMLElement>(`.tile[data-tid="${tileId}"]`);
+      if (chip) gsap.fromTo(chip, { scale: 0.4, y: -22 }, { scale: 1, y: 0, duration: 0.42, ease: "back.out(2.4)" });
       return;
     }
     const [dir, flip] = ALL_ORI[this.oriIndex];
@@ -317,6 +372,11 @@ export class GameUI {
     this.syncScene();
     this.renderHand(false);
     this.updateButtons();
+    const hits = this.connectingCells(cells, tile.id);
+    if (hits.length > 0) {
+      sfx.connect();
+      this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
+    }
   }
 
   private onHover(x: number, y: number): void {
@@ -381,9 +441,11 @@ export class GameUI {
     const tryOri = (lastOri + 1) % 4;
     const [dir, flip] = ALL_ORI[tryOri];
     const cells = orient(tile, anchor.x, anchor.y, dir, flip);
+    const fromCells = last.cells.map((c) => ({ ...c }));
     this.pending[lastIdx] = { tileId: tile.id, cells };
     this.pendingOri[lastIdx] = tryOri;
     sfx.rotate();
+    this.scene.startRotateAnim(fromCells, cells); // smooth 90° transition
     this.syncScene();
     this.updateButtons();
   }
@@ -522,6 +584,7 @@ export class GameUI {
     for (const tile of p.hand) {
       const d = document.createElement("button");
       d.className = "tile";
+      d.dataset.tid = String(tile.id);
       if (this.usedIds.has(tile.id)) d.classList.add("used");
       if (this.selectedId === tile.id) d.classList.add("sel");
       for (const c of tile.segments) {
@@ -674,7 +737,6 @@ export class GameUI {
   private updateButtons(): void {
     const human = !this.game.currentPlayer.isBot && !this.game.gameOver;
     const hasMove = human && this.game.hasLegalMove();
-    btn(this.root, "#btn-rotate", human && (this.selectedId != null || this.pending.length > 0));
     btn(this.root, "#btn-undo", human && this.pending.length > 0);
     btn(this.root, "#btn-confirm", human && this.pending.length > 0);
     btn(this.root, "#btn-pass", human && !hasMove && this.pending.length === 0);
@@ -923,7 +985,6 @@ const TEMPLATE = `
       <div class="status"></div>
       <div class="hand"></div>
       <div class="buttons">
-        <button id="btn-rotate" class="btn">Rotate</button>
         <button id="btn-undo" class="btn">Undo</button>
         <button id="btn-pass" class="btn">Pass</button>
         <button id="btn-confirm" class="btn primary">Confirm turn</button>

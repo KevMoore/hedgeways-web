@@ -47,6 +47,9 @@ export class Scene {
   private enclosed = new Set<string>();
   /** cell keys to pulse red — set when the engine rejects a Confirm. */
   private dangerCells = new Set<string>();
+  /** cell key → start time, for the connect ring pulse */
+  private connectFlash = new Map<string, number>();
+  private CONNECT_FLASH_MS = 600;
   private ghost: Ghost | null = null;
   private highlights = new Map<string, Colour>(); // cell -> colour of the hedge segment that could sit there
   private flash = new Map<string, number>(); // cell -> start time
@@ -81,6 +84,16 @@ export class Scene {
   private rotateAt: { x: number; y: number } | null = null;
   /** Fires when the user taps the floating rotate icon. */
   rotateRequestHandler: (() => void) | null = null;
+  /** Active smooth-rotation overlays. Each animates a tile's old cells
+   *  through 90° around its anchor while the new cells stay hidden. */
+  private rotateAnims: Array<{
+    fromCells: PlacedCell[];
+    toKeys: Set<string>;
+    anchorWx: number;
+    anchorWy: number;
+    startTime: number;
+  }> = [];
+  private ROTATE_ANIM_MS = 220;
   private hoverCell = "";
   private rafId = 0;
   private alive = true;
@@ -108,6 +121,8 @@ export class Scene {
         this.bursts.length ||
         this.dangerCells.size > 0 ||
         this.ghost !== null || // pulse the held-tile ghost while it exists
+        this.rotateAnims.length > 0 ||
+        this.connectFlash.size > 0 ||
         this.animating();
       const idleAnimals = !this.reduceMotion && this.acres.size > 0;
       // Real-time animation (camera ease, acre pops, bursts) draws every frame.
@@ -405,6 +420,30 @@ export class Scene {
    *  the cell), or null to hide it. */
   setRotateAt(cell: { x: number; y: number } | null): void {
     this.rotateAt = cell;
+    this.needsDraw = true;
+  }
+
+  /** Brief expanding ring on these cells — fired when a placed hedge sits
+   *  next to a matching-colour neighbour. */
+  flashConnections(cellKeys: Iterable<string>): void {
+    const now = performance.now();
+    for (const k of cellKeys) this.connectFlash.set(k, now);
+    this.needsDraw = true;
+  }
+
+  /** Kick off a smooth 90° rotation of one pending tile. The old cells are
+   *  rendered with a rotating canvas transform around their anchor; the new
+   *  cells are hidden until the animation completes. */
+  startRotateAnim(fromCells: PlacedCell[], toCells: PlacedCell[]): void {
+    if (fromCells.length === 0) return;
+    const anchor = fromCells[0]; // segment 0 — pivot point
+    this.rotateAnims.push({
+      fromCells: fromCells.map((c) => ({ ...c })),
+      toKeys: new Set(toCells.map((c) => key(c.x, c.y))),
+      anchorWx: anchor.x,
+      anchorWy: anchor.y,
+      startTime: performance.now(),
+    });
     this.needsDraw = true;
   }
 
@@ -715,8 +754,15 @@ export class Scene {
       this.drawAcreFlash(x, y, a);
     }
 
+    // purge finished rotation animations
+    this.rotateAnims = this.rotateAnims.filter((a) => now - a.startTime < this.ROTATE_ANIM_MS);
+    // cells currently animating a rotation — render via the rotated overlay, not here
+    const rotateSkipKeys = new Set<string>();
+    for (const a of this.rotateAnims) for (const k of a.toKeys) rotateSkipKeys.add(k);
+
     // tiles (with placement pop-in)
     for (const [k, cell] of this.cells) {
+      if (rotateSkipKeys.has(k)) continue;
       const [x, y] = k.split(",").map(Number);
       const t0 = this.placedAt.get(k);
       let pop = 1;
@@ -733,6 +779,55 @@ export class Scene {
       // Confirm). The pulse alternates ~2Hz so it's noticeable but not jarring.
       const danger = this.dangerCells.has(k) && Math.floor(now / 280) % 2 === 0;
       this.drawHedge(x, y, cell.colour, 1, danger, pop, mask);
+    }
+
+    // connect-flash: brief expanding ring on cells that "clicked" into place
+    for (const [k, t0] of this.connectFlash) {
+      const age = now - t0;
+      if (age > this.CONNECT_FLASH_MS) {
+        this.connectFlash.delete(k);
+        continue;
+      }
+      const p = age / this.CONNECT_FLASH_MS;
+      const [x, y] = k.split(",").map(Number);
+      const [sx, sy] = this.worldToScreen(x, y);
+      const cx = sx + this.scale / 2;
+      const cy = sy + this.scale / 2;
+      const r = this.scale * (0.45 + p * 0.55);
+      ctx.save();
+      ctx.globalAlpha = (1 - p) * 0.85;
+      ctx.strokeStyle = "#ffd34d";
+      ctx.lineWidth = Math.max(2, this.scale * 0.08 * (1 - p));
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // smooth-rotation overlays — the OLD cells are drawn with the canvas
+    // rotated around the anchor cell's centre. At t=0 the visual matches the
+    // pre-rotation state; at t=1 it lines up exactly with the new positions.
+    for (const a of this.rotateAnims) {
+      const p = Math.min(1, (now - a.startTime) / this.ROTATE_ANIM_MS);
+      const eased = 1 - Math.pow(1 - p, 3); // ease-out cubic
+      const angle = eased * (Math.PI / 2);
+      const [px, py] = this.worldToScreen(a.anchorWx, a.anchorWy);
+      const acx = px + this.scale / 2;
+      const acy = py + this.scale / 2;
+      const fromKeys = new Set(a.fromCells.map((c) => key(c.x, c.y)));
+      ctx.save();
+      ctx.translate(acx, acy);
+      ctx.rotate(angle);
+      ctx.translate(-acx, -acy);
+      for (const c of a.fromCells) {
+        const mask =
+          (fromKeys.has(key(c.x, c.y - 1)) ? 1 : 0) |
+          (fromKeys.has(key(c.x + 1, c.y)) ? 2 : 0) |
+          (fromKeys.has(key(c.x, c.y + 1)) ? 4 : 0) |
+          (fromKeys.has(key(c.x - 1, c.y)) ? 8 : 0);
+        this.drawHedge(c.x, c.y, c.colour, 1, false, 1, mask);
+      }
+      ctx.restore();
     }
 
     // free-range livestock roaming inside the fields (only if the sheet loaded)
