@@ -131,6 +131,9 @@ export class GameUI {
     }
     saveActive(this.game.toSnapshot()); // auto-save at each turn boundary
     const p = this.game.currentPlayer;
+    // Bots may re-frame the camera (zoom out to follow the play); on the human's
+    // own turn their chosen zoom is respected.
+    this.scene.setAutoFrame(p.isBot);
     if (p.isBot) {
       this.setStatus(`${p.animal} ${p.name} ${this.planningLine(p.id)}`);
       this.renderHand(true);
@@ -478,6 +481,10 @@ export class GameUI {
       return;
     }
     const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.currentOri(), this.liftSide);
+    // First time a drag reaches the board, zoom in toward the tile so placing /
+    // rotating on a large (zoomed-out) board is precise. focusForPlacement
+    // no-ops once already zoomed in, so this effectively fires once per drag.
+    if (this.dragging) this.scene.focusForPlacement(target[0], target[1]);
     // The finger dot only makes sense when the ghost is lifted away from the
     // finger (touch hand-placement). On a flush drag the ghost sits at the
     // finger, so the dot would just sit under it — skip it.
@@ -909,11 +916,14 @@ export class GameUI {
   private prevScores: number[] = [];
 
   private renderHud(): void {
-    const ps = this.root.querySelector(".players")!;
+    const ps = this.root.querySelector(".players") as HTMLElement;
     // dispose any prior farmer canvases before clearing the chips
     for (const w of this.farmerWidgets) w.dispose();
     this.farmerWidgets = [];
     ps.innerHTML = "";
+    // Drive the mobile score-row grid: one equal column per farmer so 3-4
+    // players sit in a single row instead of wrapping into a stack.
+    ps.style.setProperty("--pcols", String(this.game.players.length));
     const lead = Math.max(...this.game.players.map((p) => totalScore(p)));
     this.game.players.forEach((p) => {
       const total = totalScore(p);
@@ -937,8 +947,10 @@ export class GameUI {
       if (usingSprite && p.farmerId) {
         const host = chip.querySelector(".pfarmer") as HTMLElement | null;
         if (host) {
+          // Smaller head-shot on phones so 3-4 chips fit the single score row.
+          const portraitSize = window.innerWidth <= 600 ? 24 : 30;
           const w = mountFarmerPortrait(host, p.farmerId, {
-            size: 30,
+            size: portraitSize,
             crop: "head",
             state: active ? "idle" : "idle",
             static: !active,

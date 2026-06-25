@@ -41,6 +41,34 @@ interface PerchSlot {
   side: number;
 }
 
+/** One bee within a swarm. Its offset from the swarm centroid is a cheap
+ *  Lissajous buzz (two oscillators per axis) — no per-frame state, so a whole
+ *  swarm is just a position + a list of these parameter bags. */
+interface Bee {
+  r: number; // primary buzz radius (cells)
+  r2: number; // secondary jitter radius
+  fx: number;
+  fy: number;
+  gx: number;
+  gy: number; // angular frequencies
+  px: number;
+  py: number;
+  qx: number;
+  qy: number; // phases
+  amber: boolean; // a few bees catch the light amber; the rest read dark
+}
+
+/** A drifting swarm of bees — a tiny cloud that wanders acre to acre. */
+interface Swarm {
+  cx: number; // centroid world position (cells)
+  cy: number;
+  tx: number; // target centroid
+  ty: number;
+  state: "move" | "hover";
+  hoverUntil: number; // when hovering over an acre, time to move on
+  bees: Bee[];
+}
+
 /** Decorative bird. No gameplay role: it circles over enclosed acres and
  *  settles on hedge edges, flushing when a tile is laid near its perch. */
 interface Bird {
@@ -70,7 +98,10 @@ const POP_MS = 320; // tile placement pop-in
 const ACRE_POP_MS = 1300; // floating "+N acres" lifetime
 const BURST_MS = 1100; // enclosure celebration spark lifetime
 const IDLE_FRAME_MS = 1000 / 30; // cap ambient-livestock redraws at ~30fps
-const BIRD_CAP = 14; // max decorative birds on the board (perf)
+const PLACE_ZOOM = 64; // px/cell the camera zooms IN to when a drag enters the board
+const BIRD_CAP = 22; // max decorative birds on the board (perf)
+const BEE_SWARM_CAP = 5; // max bee swarms on the board
+const BEE_MAX = 60; // max bees in one swarm (perf ceiling)
 const BIRD_FLUSH_R = 2.5; // a tile within this many cells of a perch flushes the bird
 const BIRD_DISTURB_MS = 3000; // a placed tile keeps birds away from its area this long
 
@@ -118,6 +149,16 @@ export class Scene {
    *  ensureVisible() when a tile lands outside the viewport. A manual Fit
    *  (recenter) re-frames on demand. */
   private firstSyncDone = false;
+  /** Set once the player manually moves the camera (pinch/wheel zoom or a pan
+   *  drag). After that, ensureVisible() stops auto-refitting so a placement /
+   *  pickup no longer stomps the zoom the player chose — vital on large boards
+   *  where they zoom in to place precisely. The Fit button (recenter) clears
+   *  this and re-frames on demand. */
+  private userMovedCam = false;
+  /** When true (bot turns), ensureVisible auto-frames even if the player has
+   *  taken camera control — so the human can watch a bot play across the board.
+   *  Reset to false on the human's own turn, where their zoom is respected. */
+  private autoFrame = false;
   private needsDraw = true;
   private lastDraw = 0; // perf.now() of the previous draw (for idle-animation throttle)
 
@@ -165,6 +206,13 @@ export class Scene {
   private reduceMotion = prefersReducedMotion();
   /** Decorative birds (always animate, even under reduce-motion — by request). */
   private birds: Bird[] = [];
+  /** Shared gathering point so the birds flock together rather than scatter —
+   *  they circle and perch near it, and it migrates to a new acre periodically. */
+  private flockCx = 0;
+  private flockCy = 0;
+  private flockUntil = 0;
+  /** Decorative bee swarms drifting between acres. */
+  private swarms: Swarm[] = [];
   private perches: PerchSlot[] = []; // outward hedge edges, recomputed each syncBoard
   /** Live valid-ghost cells — birds avoid re-perching near a hovering tile. */
   private ghostDisturb: Array<[number, number]> = [];
@@ -182,6 +230,12 @@ export class Scene {
       // in the same frame; otherwise the player sees a one-frame lag at edges.
       const panned = this.maybeAutoPan();
       const moving = this.stepCamera();
+      // While a drag is active, ANY camera motion — edge auto-pan or the
+      // placement zoom easing in — shifts the cell under the finger, so resync
+      // the ghost from the cached finger point and the tile tracks the view.
+      if ((panned || moving) && this.dragClient && this.onAutoPan) {
+        this.onAutoPan(this.dragClient.x, this.dragClient.y);
+      }
       const now = performance.now();
       const transient =
         this.needsDraw ||
@@ -196,7 +250,7 @@ export class Scene {
         this.animating();
       // Birds always animate (even under reduce-motion), so they keep the loop
       // ticking at the ambient ~30fps cadence on their own.
-      const idleAnimals = this.birds.length > 0 || (!this.reduceMotion && this.acres.size > 0);
+      const idleAnimals = this.birds.length > 0 || this.swarms.length > 0 || (!this.reduceMotion && this.acres.size > 0);
       // Real-time animation (camera ease, acre pops, bursts) draws every frame.
       // Ambient livestock only needs ~30fps, so throttle that path to halve render
       // work on 60Hz displays (and cut it further on 120Hz) once a field is claimed.
@@ -264,10 +318,14 @@ export class Scene {
     this.critters.clear();
     this.critterComp.clear();
     this.birds = [];
+    this.flockUntil = 0;
+    this.swarms = [];
     this.perches = [];
     this.ghostDisturb = [];
     this.placeDisturb = [];
     this.firstSyncDone = false;
+    this.userMovedCam = false;
+    this.autoFrame = false;
     this.scale = this.tScale = 56;
     this.camX = this.tCamX = 0.5;
     this.camY = this.tCamY = 0.5;
@@ -296,6 +354,7 @@ export class Scene {
     if (acres) this.acres = new Map(acres);
     this.rebuildCritters();
     this.rebuildBirds();
+    this.rebuildSwarms();
     if (newCells.length) {
       for (const c of newCells) this.placeDisturb.push({ x: c.x, y: c.y, until: this.nowMs() + BIRD_DISTURB_MS });
       this.flushNear(newCells, BIRD_FLUSH_R);
@@ -508,16 +567,35 @@ export class Scene {
     const avoid = this.avoidPoints();
     const safe = open.filter((s) => !avoid.some(([ax, ay]) => Math.hypot(s.wx - ax, s.wy - ay) < BIRD_FLUSH_R));
     const pool = safe.length ? safe : open; // no safe perch -> any open (bird keeps circling otherwise)
-    return pool[Math.floor(Math.random() * pool.length)];
+    // Prefer perches near the flock's gathering point so the birds roost together;
+    // fall back to the whole pool if none are nearby.
+    const [fcx, fcy] = this.flockCentre();
+    const near = pool.filter((s) => Math.hypot(s.wx - fcx, s.wy - fcy) <= 4.5);
+    const choose = near.length ? near : pool;
+    return choose[Math.floor(Math.random() * choose.length)];
   }
 
-  /** Send a bird up to wheel over a random enclosed acre before re-perching. */
+  /** The shared point the flock gathers around — re-picked to a fresh acre on a
+   *  slow timer so the whole flock migrates together. */
+  private flockCentre(): [number, number] {
+    const now = this.nowMs();
+    if (now >= this.flockUntil) {
+      const [x, y] = this.randomFieldCentre();
+      this.flockCx = x;
+      this.flockCy = y;
+      this.flockUntil = now + 12000 + Math.random() * 12000;
+    }
+    return [this.flockCx, this.flockCy];
+  }
+
+  /** Send a bird up to wheel near the flock's gathering point before re-perching
+   *  (a small per-bird spread keeps them clustered without overlapping). */
   private launchBird(b: Bird): void {
-    const [cx, cy] = this.randomFieldCentre();
+    const [fcx, fcy] = this.flockCentre();
     b.state = "circle";
-    b.cx = cx;
-    b.cy = cy;
-    b.cr = 0.9 + Math.random() * 1.1;
+    b.cx = fcx + (Math.random() - 0.5) * 2.5;
+    b.cy = fcy + (Math.random() - 0.5) * 2.5;
+    b.cr = 0.7 + Math.random() * 1.0;
     b.ang = Math.random() * Math.PI * 2;
     b.circleUntil = this.nowMs() + 2500 + Math.random() * 2500;
   }
@@ -534,7 +612,7 @@ export class Scene {
   /** Keep the bird count scaled to enclosed acres (capped); recompute perches. */
   private rebuildBirds(): void {
     this.perches = this.computePerches();
-    const target = this.enclosed.size === 0 ? 0 : Math.min(BIRD_CAP, Math.max(1, Math.round(this.enclosed.size / 1.5)));
+    const target = this.enclosed.size === 0 ? 0 : Math.min(BIRD_CAP, Math.max(1, Math.round(this.enclosed.size / 1.1)));
     if (this.birds.length > target) this.birds.length = target;
     while (this.birds.length < target) {
       const slot = this.freePerch();
@@ -653,7 +731,7 @@ export class Scene {
         ctx.save();
         ctx.fillStyle = "rgba(20,30,18,0.16)";
         ctx.beginPath();
-        ctx.ellipse(sx, sy, this.scale * 0.08, this.scale * 0.035, 0, 0, Math.PI * 2);
+        ctx.ellipse(sx, sy, this.scale * 0.06, this.scale * 0.028, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
         const flap = Math.sin(now / 90 + b.phase * 6.28);
@@ -663,7 +741,7 @@ export class Scene {
   }
 
   private drawPerchedBird(cx: number, cy: number, facing: number): void {
-    const s = this.scale * 0.1;
+    const s = this.scale * 0.08;
     if (s < 3) return; // too small to read when zoomed out
     const ctx = this.ctx;
     ctx.save();
@@ -693,7 +771,7 @@ export class Scene {
   }
 
   private drawFlyingBird(cx: number, cy: number, facing: number, flap: number): void {
-    const s = this.scale * 0.18;
+    const s = this.scale * 0.14;
     if (s < 4) return;
     const ctx = this.ctx;
     const wingY = -flap * s * 0.5; // wing tips rise and fall
@@ -716,9 +794,106 @@ export class Scene {
     ctx.restore();
   }
 
+  private makeBee(): Bee {
+    const r = () => Math.random();
+    return {
+      r: 0.13 + r() * 0.2,
+      r2: 0.08 + r() * 0.12,
+      fx: 5 + r() * 9,
+      fy: 5 + r() * 9,
+      gx: 9 + r() * 12,
+      gy: 9 + r() * 12,
+      px: r() * 6.28,
+      py: r() * 6.28,
+      qx: r() * 6.28,
+      qy: r() * 6.28,
+      amber: r() < 0.4,
+    };
+  }
+
+  /** Keep the swarm count scaled to enclosed acres (capped). A bigger, healthier
+   *  farm grows fuller swarms — bees-per-swarm scales with the acre count, and
+   *  existing swarms are topped up as the farm spreads. */
+  private rebuildSwarms(): void {
+    const target = this.enclosed.size === 0 ? 0 : Math.min(BEE_SWARM_CAP, Math.max(1, Math.round(this.enclosed.size / 6)));
+    if (this.swarms.length > target) this.swarms.length = target;
+    const perSwarm = Math.min(BEE_MAX, 18 + Math.round(this.enclosed.size * 0.9));
+    while (this.swarms.length < target) {
+      const [cx, cy] = this.randomFieldCentre();
+      this.swarms.push({
+        cx,
+        cy,
+        tx: cx,
+        ty: cy,
+        state: "hover",
+        hoverUntil: this.nowMs() + 1500 + Math.random() * 2500,
+        bees: [],
+      });
+    }
+    // grow each swarm toward the current target size (never shrink — looks odd)
+    for (const s of this.swarms) while (s.bees.length < perSwarm) s.bees.push(this.makeBee());
+  }
+
+  private updateSwarms(dt: number): void {
+    const now = this.nowMs();
+    for (const s of this.swarms) {
+      if (s.state === "hover") {
+        if (now >= s.hoverUntil) {
+          const [tx, ty] = this.randomFieldCentre();
+          s.tx = tx;
+          s.ty = ty;
+          s.state = "move";
+        } else {
+          // loiter over the acre, easing the centroid toward its hover point
+          s.cx += (s.tx - s.cx) * 0.02;
+          s.cy += (s.ty - s.cy) * 0.02;
+        }
+      } else {
+        const dx = s.tx - s.cx;
+        const dy = s.ty - s.cy;
+        const d = Math.hypot(dx, dy);
+        if (d < 0.12) {
+          s.state = "hover";
+          s.hoverUntil = now + 2200 + Math.random() * 3500;
+        } else {
+          const sp = Math.min(d, 0.0016 * dt); // slow drift between acres
+          s.cx += (dx / d) * sp;
+          s.cy += (dy / d) * sp;
+        }
+      }
+    }
+  }
+
+  private drawSwarms(): void {
+    const ctx = this.ctx;
+    const f = this.t / 1000;
+    const dot = Math.max(0.6, this.scale * 0.022);
+    for (const s of this.swarms) {
+      // faint haze so the cluster reads as one drifting cloud
+      const [cx0, cy0] = this.worldToScreen(s.cx, s.cy);
+      ctx.fillStyle = "rgba(120,110,55,0.06)";
+      ctx.beginPath();
+      ctx.ellipse(cx0, cy0, this.scale * 0.36, this.scale * 0.28, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (const b of s.bees) {
+        const ox = b.r * Math.sin(f * b.fx + b.px) + b.r2 * Math.sin(f * b.gx + b.qx);
+        const oy = b.r * Math.cos(f * b.fy + b.py) + b.r2 * Math.sin(f * b.gy + b.qy);
+        const [bx, by] = this.worldToScreen(s.cx + ox, s.cy + oy);
+        ctx.fillStyle = b.amber ? "rgba(150,110,30,0.92)" : "rgba(28,26,18,0.92)";
+        ctx.beginPath();
+        ctx.arc(bx, by, dot, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
   /** Re-fit only if part of the board has drifted outside the viewport. */
   ensureVisible(): void {
     if (this.cells.size === 0) return;
+    // Once the player has taken camera control, respect it — don't snap the
+    // zoom back to "whole board" on the next sync (Fit re-arms auto-framing).
+    // Exception: bot turns (autoFrame) always re-frame so the human can watch.
+    if (this.userMovedCam && !this.autoFrame) return;
     const { minX, minY, maxX, maxY } = this.boundsWithGhost();
     const vw = this.canvas.width / this.dpr;
     const vh = this.canvas.height / this.dpr;
@@ -728,9 +903,41 @@ export class Scene {
     if (x0 < pad || y0 < pad || x1 > vw - pad || y1 > vh - pad) this.fitBoard();
   }
 
-  /** Manual recenter (e.g. a Fit button) — re-frames the whole board on demand. */
+  /** Manual recenter (e.g. a Fit button) — re-frames the whole board on demand
+   *  and re-arms auto-framing (clears the user-camera lock). */
   recenter(): void {
+    this.userMovedCam = false;
     this.fitBoard();
+  }
+
+  /** Toggle bot-turn auto-framing. On a bot's turn (on=true) the camera is
+   *  free to re-frame even if the player zoomed in; re-frame immediately if
+   *  part of the board is off-screen. On the human's turn (on=false) their
+   *  camera is left alone. */
+  setAutoFrame(on: boolean): void {
+    this.autoFrame = on;
+    if (on) this.ensureVisible();
+  }
+
+  /** Zoom IN toward a board cell when a drag enters the board, so placing /
+   *  rotating on a large (zoomed-out) board is precise. Only ever zooms in
+   *  (no-op once at/above PLACE_ZOOM, so it fires once per drag and never
+   *  fights a player who is already zoomed further in). The target cell is
+   *  kept under its current screen pixel as the view scales up, so the tile
+   *  doesn't lurch. Locks the camera so the zoom persists past the placement. */
+  focusForPlacement(cellX: number, cellY: number): void {
+    if (this.tScale >= PLACE_ZOOM) return;
+    const wx = cellX + 0.5;
+    const wy = cellY + 0.5;
+    const [sx, sy] = this.worldToScreen(wx, wy); // current screen pos of the cell
+    const vw = this.canvas.width / this.dpr;
+    const vh = this.canvas.height / this.dpr;
+    this.userMovedCam = true; // persist like a manual zoom (no auto-refit after)
+    this.tScale = PLACE_ZOOM;
+    // solve cam so worldToScreen(wx,wy) at PLACE_ZOOM lands on the same pixel
+    this.tCamX = wx - (sx - vw / 2) / PLACE_ZOOM;
+    this.tCamY = wy - (sy - vh / 2) / PLACE_ZOOM;
+    this.needsDraw = true;
   }
 
   private boundsWithGhost(): { minX: number; minY: number; maxX: number; maxY: number } {
@@ -801,7 +1008,7 @@ export class Scene {
     this.tCamX += dxCells;
     this.tCamY += dyCells;
     this.needsDraw = true;
-    if (this.onAutoPan) this.onAutoPan(this.dragClient.x, this.dragClient.y);
+    // ghost resync handled centrally in the render loop (covers zoom ease too)
     return true;
   }
 
@@ -822,17 +1029,18 @@ export class Scene {
   }
 
   /** Convert client coords to the cell where the LIFTED ghost should sit.
-   *  When touch-mode is off, this is just the finger cell. When on, the ghost
-   *  is offset PERPENDICULAR to the tile's long axis — a horizontal tile lifts
-   *  up, a vertical tile slides to the side — so the finger never sits under
-   *  the tile and the offset stays as small as possible (the tile is only one
-   *  cell thick across its short axis). The offset flips away from the nearest
-   *  canvas edge so the tile doesn't get pushed off-screen. */
+   *  When touch-mode is off, this is just the finger cell. When on, the tile
+   *  sits ONE square to the RIGHT of the finger — a tight, predictable gap that
+   *  keeps the tile beside (not under) the finger, with the finger to its left.
+   *  Flips to the left only when the finger is hard against the right edge, so
+   *  the tile can't slide off-screen. (Orientation no longer changes the
+   *  offset — kept in the signature for callers and future per-orientation
+   *  tuning.) */
   liftedCellAt(
     clientX: number,
     clientY: number,
-    ori: "H" | "V",
-    preferSide: "L" | "R" = "L",
+    _ori: "H" | "V",
+    _preferSide: "L" | "R" = "L",
   ): {
     target: [number, number];
     finger: [number, number];
@@ -840,24 +1048,9 @@ export class Scene {
     const [fx, fy] = this.cellAtClient(clientX, clientY);
     if (!this.touchGhostOffset) return { target: [fx, fy], finger: [fx, fy] };
     const rect = this.canvas.getBoundingClientRect();
-    const SEP = 2; // one clear cell between the finger and the tile's near edge
-    if (ori === "H") {
-      // horizontal tile (1 cell tall) → offset vertically; up by default, down
-      // if the finger is near the top edge.
-      const down = clientY - rect.top < rect.height * 0.3;
-      return { target: [fx, down ? fy + SEP : fy - SEP], finger: [fx, fy] };
-    }
-    // vertical tile (1 cell wide) → offset sideways. Honour the side the drag
-    // started on (preferSide) so the tile stays where it was lifted from and
-    // doesn't flip mid-drag (which felt sticky). Only flip when the chosen side
-    // would push the tile off the visible canvas. A small upward bias lifts it
-    // to sit beside-and-slightly-above the finger.
-    const sx = clientX - rect.left;
-    let side = preferSide;
-    if (side === "L" && sx < rect.width * 0.16) side = "R";
-    else if (side === "R" && sx > rect.width * 0.84) side = "L";
-    const UP_BIAS = 1;
-    return { target: [side === "L" ? fx - SEP : fx + SEP, fy - UP_BIAS], finger: [fx, fy] };
+    const nearRightEdge = clientX - rect.left > rect.width * 0.88;
+    const dx = nearRightEdge ? -1 : 1; // 1 square right, or left when pinned at the right edge
+    return { target: [fx + dx, fy], finger: [fx, fy] };
   }
 
   /** Which half of the board canvas a client-x falls on — used to seed the
@@ -1119,6 +1312,7 @@ export class Scene {
         lastY = e.clientY;
         return;
       }
+      this.userMovedCam = true; // player panned — stop auto-refitting
       this.camX -= (e.clientX - lastX) / this.scale;
       this.camY -= (e.clientY - lastY) / this.scale;
       this.tCamX = this.camX; // keep target synced so easing doesn't fight the drag
@@ -1192,6 +1386,7 @@ export class Scene {
   }
 
   private zoomBy(f: number): void {
+    this.userMovedCam = true; // player took zoom control — stop auto-refitting
     this.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.scale * f));
     this.tScale = this.scale; // immediate for user zoom
     this.needsDraw = true;
@@ -1324,6 +1519,10 @@ export class Scene {
     if (this.birds.length) {
       this.updateBirds(ambientDt);
       this.drawBirds();
+    }
+    if (this.swarms.length) {
+      this.updateSwarms(ambientDt);
+      this.drawSwarms();
     }
 
     // highlights — quiet hint that the selected tile could sit here (a small
@@ -1683,9 +1882,38 @@ export class Scene {
     const eH = (hedgeMask & 2) !== 0;
     const sH = (hedgeMask & 4) !== 0;
     const wH = (hedgeMask & 8) !== 0;
-    if (nH && eH && sH && wH) {
+
+    // Subtle colour divider on internal seams, so adjacent segments (and joined
+    // same-colour tiles) read as distinct hedges rather than one blended block.
+    // Drawn only on the N and W internal edges so each shared seam is stroked
+    // once, in a darker shade of the cell's own colour.
+    if (alpha >= 1 && !danger) {
+      ctx.strokeStyle = hexA(COLOUR_HEX_DARK[colour], 0.5);
+      ctx.lineWidth = Math.max(1, s * 0.045);
+      ctx.beginPath();
+      if (nH) {
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + s, py);
+      }
+      if (wH) {
+        ctx.moveTo(px, py);
+        ctx.lineTo(px, py + s);
+      }
+      ctx.stroke();
+    }
+
+    // Concave corners: where two abutting hedge sides meet but the cell across
+    // that diagonal is empty, this cell's bare colour corner pokes through the
+    // leafy ribbon (most visible at the inner elbows of L/T/+ shapes). Flag them
+    // so we can patch each with a leaf clump below — and DON'T early-return on a
+    // fully-interior cell that still has such an exposed corner.
+    const cNE = nH && eH && !this.cells.has(key(x + 1, y - 1));
+    const cSE = sH && eH && !this.cells.has(key(x + 1, y + 1));
+    const cSW = sH && wH && !this.cells.has(key(x - 1, y + 1));
+    const cNW = nH && wH && !this.cells.has(key(x - 1, y - 1));
+    if (nH && eH && sH && wH && !(cNE || cSE || cSW || cNW)) {
       ctx.restore();
-      return; // fully interior: no perimeter hedge to draw
+      return; // fully interior with no exposed corner: nothing more to draw
     }
 
     // Hedge perimeter: a chunky continuous base stripe along outward-facing
@@ -1750,6 +1978,23 @@ export class Scene {
     side(!eH, () => px + s - margin, (t) => py + margin + t * (s - 2 * margin), 1, 0);
     side(!sH, (t) => px + margin + t * (s - 2 * margin), () => py + s - margin, 0, 1);
     side(!wH, () => px + margin, (t) => py + margin + t * (s - 2 * margin), -1, 0);
+
+    // Patch concave corners flagged above: a dark base disc to kill the bare
+    // colour notch, then a small leaf clump so the ribbon reads continuous.
+    const cornerClump = (cxp: number, cyp: number) => {
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(cxp, cyp, s * 0.13, 0, Math.PI * 2);
+      ctx.fill();
+      const n = Math.max(4, Math.round(s * 0.16));
+      for (let i = 0; i < n; i++) {
+        leaf(cxp + (rng() - 0.5) * s * 0.24, cyp + (rng() - 0.5) * s * 0.24, 0.7 + rng() * 0.5);
+      }
+    };
+    if (cNE) cornerClump(px + s, py);
+    if (cSE) cornerClump(px + s, py + s);
+    if (cSW) cornerClump(px, py + s);
+    if (cNW) cornerClump(px, py);
 
     // Sun-catch: scattered lighter leaf specks for the leaves-in-light look.
     const rng2 = makeRng(hash(x, y) ^ 0x5a7d);
