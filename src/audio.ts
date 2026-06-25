@@ -210,6 +210,12 @@ export const sfx = {
 	place() {
 		tone(220 + Math.random() * 40, 0.12, 'triangle', 0.1);
 	},
+	/** Bright three-note flourish when a livestock perk pays off. */
+	bonus() {
+		tone(660, 0.08, 'triangle', 0.08);
+		tone(880, 0.08, 'triangle', 0.08, 0.08);
+		tone(1320, 0.14, 'triangle', 0.07, 0.16);
+	},
 	pickup() {
 		tone(520, 0.06, 'sine', 0.07);
 	},

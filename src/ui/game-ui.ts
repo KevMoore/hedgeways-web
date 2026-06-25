@@ -107,7 +107,6 @@ export class GameUI {
 
     root.querySelector("#btn-undo")!.addEventListener("click", () => this.undo());
     root.querySelector("#btn-confirm")!.addEventListener("click", () => this.confirm());
-    root.querySelector("#btn-pass")!.addEventListener("click", () => this.passTurn());
     root.querySelector("#btn-help")!.addEventListener("click", () => showHowTo());
     root.querySelector("#btn-fit")!.addEventListener("click", () => this.scene.recenter());
     root.querySelector("#btn-sound")!.addEventListener("click", (e) => this.toggleSound(e));
@@ -130,7 +129,7 @@ export class GameUI {
     saveActive(this.game.toSnapshot()); // auto-save at each turn boundary
     const p = this.game.currentPlayer;
     if (p.isBot) {
-      this.setStatus(`${p.animal} ${p.name} is planning…`);
+      this.setStatus(`${p.animal} ${p.name} ${this.planningLine(p.id)}`);
       this.renderHand(true);
       this.updateButtons();
       this.setBotThinking(true); // amber glow on the active chip while it ponders
@@ -138,14 +137,15 @@ export class GameUI {
       this.botTimer = window.setTimeout(() => this.botMove(), this.reduceMotion ? 40 : 90);
       return;
     }
-    // human
-    const hasMove = this.game.hasLegalMove();
+    // human. If — against all odds — there's no legal placement, quietly hand the
+    // turn on (no "pass" is ever shown to the player). See Game.skipStuck.
+    if (!this.game.hasLegalMove()) {
+      this.game.skipStuck();
+      this.syncScene();
+      return this.beginTurn();
+    }
     this.renderHand(false, true);
-    this.setStatus(
-      hasMove
-        ? `Your turn — drag a hedge onto the field`
-        : `No legal move — you must pass`,
-    );
+    this.setStatus(`Your turn — drag a hedge onto the field`);
     this.updateButtons();
   }
 
@@ -157,19 +157,19 @@ export class GameUI {
 
   /** Drive one bot turn: search, then a tier-flavoured "planning" beat (with
    *  the AI's actual search latency absorbed so the felt think-time stays
-   *  consistent), then the animated lay — or a pass if it's stuck. */
+   *  consistent), then the animated lay. */
   private async runBotTurn(): Promise<void> {
     const actor = this.game.currentPlayer;
     const t0 = performance.now();
     const move = chooseAiMove(this.game);
     if (!this.alive || this.game.currentPlayer !== actor) return;
     if (!move) {
-      // Brief beat before the pass callout so it doesn't snap past.
-      await this.botDelay(this.reduceMotion ? 150 : 420);
+      // No legal placement (effectively never happens). Quietly hand the turn on
+      // — no "pass" is surfaced. See Game.skipStuck.
+      await this.botDelay(this.reduceMotion ? 80 : 200);
       if (!this.alive || this.game.currentPlayer !== actor) return;
       this.setBotThinking(false);
-      this.game.pass();
-      callout(`${actor.animal} ${actor.name} passes`, "pass");
+      this.game.skipStuck();
       this.syncScene();
       this.beginTurn();
       return;
@@ -290,17 +290,20 @@ export class GameUI {
     const acresTxt = `${scored} acre${scored === 1 ? "" : "s"}`;
     const fieldsTxt = fields >= 2 ? ` in ${fields} fields` : "";
     const bonusTxt = (res.bonus ?? 0) > 0 ? ` +${res.bonus}🔥` : "";
+    const perkTxt = res.perk ? ` · ${res.perk}!` : "";
 
     let head = "";
     let hot = false;
     if (streak >= 4) (head = "ON FIRE! "), (hot = true);
     else if (streak === 3) (head = "Triple! "), (hot = true);
     else if (streak === 2) (head = "Double! "), (hot = true);
-    else if (res.mega) (head = "Mega field! "), (hot = true);
+    else if (res.mega) (head = "Bumper field! "), (hot = true);
+    else if (res.perk) hot = true; // a fired perk earns the warmer styling too
 
-    callout(`${head}${who} encloses ${acresTxt}${fieldsTxt}${bonusTxt}`, hot ? "streak" : "score");
+    callout(`${head}${who} fences in ${acresTxt}${fieldsTxt}${perkTxt}${bonusTxt}`, hot ? "streak" : "score");
     if (hot) {
       sfx.streak(streak);
+      if (res.perk) sfx.bonus(); // a bright little flourish when a livestock perk pays off
       if (streak >= 3 || res.mega) confetti(40);
     }
   }
@@ -449,11 +452,9 @@ export class GameUI {
     return true;
   }
 
-  /** Vertical span (in cells) of the current tile at the current oriIndex.
-   *  Used to size the touch lift so a 3-cell tall vertical tile sits fully
-   *  above the finger and a 1-cell horizontal one gets a comfortable gap. */
-  private tileSpanCells(): number {
-    return ALL_ORI[this.oriIndex][0] === "V" ? 3 : 1;
+  /** Orientation of the current tile — drives which way the touch lift offsets. */
+  private currentOri(): Orientation {
+    return ALL_ORI[this.oriIndex][0];
   }
 
   private onPickedMove(x: number, y: number, clientX: number, clientY: number): void {
@@ -473,7 +474,7 @@ export class GameUI {
       this.scene.setFingerMarker(null);
       return;
     }
-    const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.tileSpanCells());
+    const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.currentOri());
     // The finger dot only makes sense when the ghost is lifted away from the
     // finger (touch hand-placement). On a flush drag the ghost sits at the
     // finger, so the dot would just sit under it — skip it.
@@ -491,7 +492,7 @@ export class GameUI {
     // reads `touchGhostOffset` to know whether to apply the lift. If we clear
     // first the tile drops at the finger cell, not the ghost cell.
     const overBoard = this.scene.pointOverBoard(clientX, clientY);
-    const lifted = overBoard ? this.scene.liftedCellAt(clientX, clientY, this.tileSpanCells()) : null;
+    const lifted = overBoard ? this.scene.liftedCellAt(clientX, clientY, this.currentOri()) : null;
     this.scene.setTouchGhostOffset(false); // touch drag ending — back to flush
     this.scene.setFingerMarker(null);
     // Released anywhere off the board canvas — un-play. Tile returns to hand
@@ -697,8 +698,7 @@ export class GameUI {
     if (this.game.currentPlayer.isBot) return;
     const n = this.pending.length;
     if (n === 0) {
-      const hasMove = this.game.hasLegalMove();
-      this.setStatus(hasMove ? `Your turn — drag a hedge onto the field` : `No legal move — you must pass`);
+      this.setStatus(`Your turn — drag a hedge onto the field`);
       return;
     }
     const left = 3 - n;
@@ -707,12 +707,6 @@ export class GameUI {
         ? `${n} hedge${n === 1 ? "" : "s"} laid — confirm, or plant up to ${left} more`
         : `3 hedges laid — confirm to end the day`,
     );
-  }
-
-  passTurn(): void {
-    if (this.game.gameOver) return;
-    this.game.pass();
-    this.beginTurn();
   }
 
   /** Free placement means there are no pre-computed candidate dots to show.
@@ -891,7 +885,7 @@ export class GameUI {
       // shift up. Clearing first would make it return the bare finger cell
       // and the tile would drop where the finger is, not where the ghost is.
       if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
-        const { target } = this.scene.liftedCellAt(e.clientX, e.clientY, this.tileSpanCells());
+        const { target } = this.scene.liftedCellAt(e.clientX, e.clientY, this.currentOri());
         this.scene.setTouchGhostOffset(false);
         this.scene.setFingerMarker(null);
         this.onTapCell(target[0], target[1]); // places, or flashInvalid + donkey
@@ -921,7 +915,7 @@ export class GameUI {
       const active = p.id === this.game.current && !this.game.gameOver;
       chip.className = "pchip" + (active ? " active" : "") + (total === lead && lead > 0 ? " lead" : "");
       chip.style.setProperty("--pc", p.colour);
-      const bonusTag = p.bonus > 0 ? `<span class="pbonus" title="${p.score} acres + ${p.bonus} streak">+${p.bonus}🔥</span>` : "";
+      const bonusTag = p.bonus > 0 ? `<span class="pbonus" title="${p.score} acres + ${p.bonus} bonus 🔥">+${p.bonus}🔥</span>` : "";
       const usingSprite = !!p.farmerId && getFarmerSprites().knows(p.farmerId);
       const portraitHtml = usingSprite
         ? `<span class="pfarmer"></span>`
@@ -965,10 +959,8 @@ export class GameUI {
 
   private updateButtons(): void {
     const human = !this.game.currentPlayer.isBot && !this.game.gameOver;
-    const hasMove = human && this.game.hasLegalMove();
     btn(this.root, "#btn-undo", human && this.pending.length > 0);
     btn(this.root, "#btn-confirm", human && this.pending.length > 0);
-    btn(this.root, "#btn-pass", human && !hasMove && this.pending.length === 0);
     (this.root.querySelector("#btn-confirm") as HTMLElement).classList.toggle(
       "ready",
       human && this.pending.length > 0,
@@ -989,6 +981,19 @@ export class GameUI {
     this.grabOffset = { dx: 0, dy: 0 };
     this.scene.setHighlights(new Map());
     this.scene.setGhost(null, false);
+  }
+
+  /** A warm, farmer-ish "thinking" line for a bot's turn (stable per turn). */
+  private planningLine(playerId: number): string {
+    const lines = [
+      "is sizing up the field…",
+      "is eyeing the hedgerows…",
+      "scratches their chin…",
+      "is pacing the furrows…",
+      "weighs up where to plant…",
+      "is reading the land…",
+    ];
+    return lines[(playerId + this.game.turn) % lines.length];
   }
 
   private toggleSound(e: Event): void {
@@ -1161,12 +1166,12 @@ export class GameUI {
   }
 
   // ---- test hook ----
-  /** Play one legal move (or pass) for the current player; returns true if a move was laid. */
+  /** Play one legal move for the current player; returns true if a move was laid. */
   autoPlayTurn(): boolean {
     if (this.game.gameOver) return false;
     const moves = generateMoves(this.game.board, this.game.currentPlayer.hand, { limit: 1, maxNodes: Infinity });
     if (moves.length === 0) {
-      this.game.pass();
+      this.game.skipStuck();
       this.syncScene();
       this.beginTurn();
       return false;
@@ -1217,8 +1222,7 @@ const TEMPLATE = `
       <div class="hand"></div>
       <div class="buttons">
         <button id="btn-undo" class="btn">Undo</button>
-        <button id="btn-pass" class="btn">Pass</button>
-        <button id="btn-confirm" class="btn primary">Confirm turn</button>
+        <button id="btn-confirm" class="btn primary">Plant hedges</button>
       </div>
     </footer>
   </div>`;

@@ -508,21 +508,32 @@ export class Scene {
   }
 
   /** Convert client coords to the cell where the LIFTED ghost should sit.
-   *  When touch-mode is off, this is just the finger cell. When on, the
-   *  ghost is lifted by tileSpanCells + 1 cells (up by default, down if the
-   *  finger is near the top edge of the canvas). */
-  liftedCellAt(clientX: number, clientY: number, tileSpanCells: number): {
+   *  When touch-mode is off, this is just the finger cell. When on, the ghost
+   *  is offset PERPENDICULAR to the tile's long axis — a horizontal tile lifts
+   *  up, a vertical tile slides to the side — so the finger never sits under
+   *  the tile and the offset stays as small as possible (the tile is only one
+   *  cell thick across its short axis). The offset flips away from the nearest
+   *  canvas edge so the tile doesn't get pushed off-screen. */
+  liftedCellAt(clientX: number, clientY: number, ori: "H" | "V"): {
     target: [number, number];
     finger: [number, number];
   } {
     const [fx, fy] = this.cellAtClient(clientX, clientY);
     if (!this.touchGhostOffset) return { target: [fx, fy], finger: [fx, fy] };
     const rect = this.canvas.getBoundingClientRect();
-    const fingerScreenY = clientY - rect.top;
-    const lift = Math.max(2, tileSpanCells + 1); // cells of separation
-    const flipDown = fingerScreenY < rect.height * 0.3;
-    const targetY = flipDown ? fy + lift : fy - lift;
-    return { target: [fx, targetY], finger: [fx, fy] };
+    const SEP = 2; // one clear cell between the finger and the tile's near edge
+    if (ori === "H") {
+      // horizontal tile (1 cell tall) → offset vertically; up by default, down
+      // if the finger is near the top edge.
+      const down = clientY - rect.top < rect.height * 0.3;
+      return { target: [fx, down ? fy + SEP : fy - SEP], finger: [fx, fy] };
+    }
+    // vertical tile (1 cell wide) → offset sideways; left by default, right if
+    // the finger is near the left edge. A small upward bias lifts it to sit
+    // beside-and-slightly-above the finger rather than hanging straight down.
+    const right = clientX - rect.left < rect.width * 0.3;
+    const UP_BIAS = 1;
+    return { target: [right ? fx + SEP : fx - SEP, fy - UP_BIAS], finger: [fx, fy] };
   }
 
   setGhost(cells: PlacedCell[] | null, valid: boolean): void {

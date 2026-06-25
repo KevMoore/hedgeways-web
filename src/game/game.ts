@@ -1,6 +1,13 @@
 import { Board } from "./board";
 import { buildBag } from "./bag";
-import { HAND_SIZE, PLAYER_KITS } from "./constants";
+import {
+  HAND_SIZE,
+  LIVESTOCK,
+  PLAYER_KITS,
+  livestockPerk,
+  livestockPerkFires,
+  type LivestockPerk,
+} from "./constants";
 import { applyMoveToBoard, generateMoves } from "./moves";
 import { validateMove } from "./placement";
 import { findEnclosed } from "./scoring";
@@ -43,26 +50,32 @@ export interface TurnResult {
   newlyEnclosed?: string[];
   fields?: number; // distinct fields sealed this move
   streak?: number; // actor's scoring streak after this move
-  bonus?: number; // flair points awarded this move (streak + mega)
+  bonus?: number; // flair points awarded this move (streak + mega + livestock perk)
   mega?: boolean; // exceptional single move (≥3 acres or ≥2 fields)
-  passed?: boolean;
+  perk?: string; // livestock perk name, set when the perk's +1 fired this move
   ended?: boolean;
 }
 
 /** Winning/ranking total: rules-pure acres plus streak/mega flair points. */
 export const totalScore = (p: Player): number => p.score + (p.bonus ?? 0);
 
-/** Count the distinct 4-connected regions among a set of cell keys. */
-function countRegions(cellKeys: string[]): number {
+const LIVESTOCK_PERK_NAME = Object.fromEntries(LIVESTOCK.map((l) => [l.perk, l.perkName])) as Record<
+  LivestockPerk,
+  string
+>;
+
+/** Sizes of the distinct 4-connected regions among a set of cell keys. */
+function regionSizes(cellKeys: string[]): number[] {
   const set = new Set(cellKeys);
   const seen = new Set<string>();
-  let regions = 0;
+  const sizes: number[] = [];
   for (const start of cellKeys) {
     if (seen.has(start)) continue;
-    regions++;
+    let size = 0;
     const stack = [start];
     seen.add(start);
     while (stack.length) {
+      size++;
       const [x, y] = stack.pop()!.split(",").map(Number);
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const nk = `${x + dx},${y + dy}`;
@@ -72,8 +85,9 @@ function countRegions(cellKeys: string[]): number {
         }
       }
     }
+    sizes.push(size);
   }
-  return regions;
+  return sizes;
 }
 
 export class Game {
@@ -84,7 +98,7 @@ export class Game {
   turn = 0;
   gameOver = false;
   winnerId: number | null = null;
-  private consecutivePasses = 0;
+  private consecutiveSkips = 0;
   private rng: () => number;
 
   constructor(private config: GameConfig, restore?: GameSnapshot) {
@@ -114,7 +128,7 @@ export class Game {
     this.turn = s.turn;
     this.gameOver = s.gameOver;
     this.winnerId = s.winnerId;
-    this.consecutivePasses = s.passes;
+    this.consecutiveSkips = s.passes ?? 0;
     // self-heal a stale save: recompute enclosure under current rules and drop
     // any ownership for cells that are no longer truly enclosed
     this.board.enclosed = findEnclosed(this.board);
@@ -141,7 +155,7 @@ export class Game {
       turn: this.turn,
       gameOver: this.gameOver,
       winnerId: this.winnerId,
-      passes: this.consecutivePasses,
+      passes: this.consecutiveSkips,
     };
   }
 
@@ -207,15 +221,29 @@ export class Game {
 
     // streak/mega flair (cosmetic + small bonus on top of acres)
     const scored = newly.length;
-    const fields = scored > 0 ? countRegions(newly) : 0;
+    const sizes = scored > 0 ? regionSizes(newly) : [];
+    const fields = sizes.length;
+    const biggest = sizes.length ? Math.max(...sizes) : 0;
     const mega = scored >= 3 || fields >= 2;
     player.streak = scored > 0 ? player.streak + 1 : 0;
     const streakBonus = player.streak >= 2 ? Math.min(player.streak - 1, 3) : 0;
-    const bonus = scored > 0 ? streakBonus + (mega ? 1 : 0) : 0;
+
+    // livestock perk: a small +1 that rewards the playstyle each animal favours.
+    let perkBonus = 0;
+    let perkName: string | undefined;
+    if (scored > 0) {
+      const kind = livestockPerk(player.animal);
+      if (kind && livestockPerkFires(kind, { scored, fields, biggest, streak: player.streak })) {
+        perkBonus = 1;
+        perkName = LIVESTOCK_PERK_NAME[kind];
+      }
+    }
+
+    const bonus = scored > 0 ? streakBonus + (mega ? 1 : 0) + perkBonus : 0;
     player.bonus += bonus;
 
-    this.consecutivePasses = 0;
-    const flair = { scored, newlyEnclosed: newly, fields, streak: player.streak, bonus, mega };
+    this.consecutiveSkips = 0;
+    const flair = { scored, newlyEnclosed: newly, fields, streak: player.streak, bonus, mega, perk: perkName };
 
     // replenish
     while (player.hand.length < HAND_SIZE && this.bag.length > 0) player.hand.push(this.bag.pop()!);
@@ -230,17 +258,24 @@ export class Game {
     return { ok: true, ...flair };
   }
 
-  /** Current player has no legal move (or chooses to pass). */
-  pass(): TurnResult {
+  /**
+   * Safety backstop for the (empirically unreachable) case where the current
+   * player has no legal placement. There is no player-facing "pass" — this only
+   * keeps the engine sound: silently hand the turn on, and if a whole round goes
+   * by with nobody able to move, end the game so play can never hang. In 300
+   * self-play games (5,220 turns) this never fired; it exists purely so a
+   * pathological monochrome hand can't freeze the turn loop.
+   */
+  skipStuck(): TurnResult {
     if (this.gameOver) return { ok: false, reason: "game over" };
-    this.currentPlayer.streak = 0; // a pass breaks the scoring streak
-    this.consecutivePasses++;
-    if (this.consecutivePasses >= this.players.length) {
+    this.currentPlayer.streak = 0;
+    this.consecutiveSkips++;
+    if (this.consecutiveSkips >= this.players.length) {
       this.endGame();
-      return { ok: true, passed: true, ended: true };
+      return { ok: true, ended: true };
     }
     this.advance();
-    return { ok: true, passed: true };
+    return { ok: true };
   }
 
   private advance(): void {
