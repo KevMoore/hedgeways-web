@@ -78,7 +78,7 @@ export class GameUI {
     this.scene.leaveHandler = () => this.scene.setGhost(null, false);
     // Drag a placed pending tile around the board to reposition it (or off
     // the board entirely, back to the hand).
-    this.scene.dragStart = (x, y) => this.tryPickPending(x, y);
+    this.scene.dragStart = (x, y, _cx, _cy, isTouch) => this.tryPickPending(x, y, isTouch);
     this.scene.dragMove = (x, y, cx, cy) => this.onPickedMove(x, y, cx, cy);
     this.scene.dragEnd = (x, y, cx, cy) => this.onPickedRelease(x, y, cx, cy);
     // Floating rotate icon on the board → rotate the most recent pending.
@@ -334,7 +334,7 @@ export class GameUI {
   /** Pointerdown on a board cell — if it's part of a pending tile, pick it
    *  up (remove from pending, set as selected, remember origin). Returns
    *  true to claim the gesture; false to let the scene pan as normal. */
-  private tryPickPending(x: number, y: number): boolean {
+  private tryPickPending(x: number, y: number, isTouch: boolean): boolean {
     if (this.busy || this.game.currentPlayer.isBot) return false;
     if (this.pickedOrigin !== null) return false;
     const idx = this.pending.findIndex((p) => p.cells.some((c) => c.x === x && c.y === y));
@@ -345,6 +345,7 @@ export class GameUI {
     this.selectedId = placement.tileId;
     this.oriIndex = oriIdx;
     this.pickedOrigin = { placement, oriIdx };
+    this.scene.setTouchGhostOffset(isTouch); // lift above finger on mobile
     this.clearDanger();
     sfx.pickup();
     this.syncScene();
@@ -367,6 +368,7 @@ export class GameUI {
     if (this.selectedId == null) return;
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
+    this.scene.setTouchGhostOffset(false); // touch drag ending — back to flush
     // Released anywhere off the board canvas — un-play. Tile returns to hand
     // with its current orientation preserved so the next pick keeps it.
     if (!this.scene.pointOverBoard(clientX, clientY)) {
@@ -712,6 +714,8 @@ export class GameUI {
       if (!dragging) {
         if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_SLOP) return;
         dragging = true;
+        // Touch drag → lift the ghost above the finger so it isn't occluded.
+        this.scene.setTouchGhostOffset(e.pointerType === "touch");
         // commit to the drag: select this tile so the ghost-preview path is live.
         // Orientation is whatever the player last chose — never auto-flipped.
         if (this.selectedId !== tileId) {
@@ -734,6 +738,7 @@ export class GameUI {
       const wasDrag = dragging;
       pressed = false;
       dragging = false;
+      this.scene.setTouchGhostOffset(false);
       try {
         d.releasePointerCapture(pid);
       } catch {
