@@ -321,8 +321,8 @@ export function showHowTo(): void {
   controls.append(ch);
   const list = el("ul", "ht-controls");
   for (const [k, v] of [
-    ["👆", "Tap a highlighted square to lay the selected hedge"],
-    ["↻", "Rotate the selected hedge; Undo takes back a pending hedge"],
+    ["👆", "Drag a hedge onto the field — or tap a hedge, then tap a square — to lay it"],
+    ["↻", "Rotate spins the selected hedge; Undo takes back a pending hedge"],
     ["✅", "Confirm turn once you're happy with your hedges"],
     ["🖐️", "Drag to pan, pinch or scroll to zoom, ⤢ recenters the board"],
     ["🔊", "Mute or unmute sound"],

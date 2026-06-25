@@ -201,6 +201,29 @@ describe("placement (Qwirkle-strict)", () => {
     const m: PlacedTile[] = [{ tileId: 2, cells: orient(far, 10, 10, "H", false) }];
     expect(validateMove(b, m).ok).toBe(false);
   });
+
+  it("allows several unrelated hedges in one turn if each links to the board", () => {
+    const b = new Board();
+    // two separate existing hedgerows, far apart
+    for (const c of orient(tile(1, "GGG"), 0, 0, "H", false)) b.place(c, 1);
+    for (const c of orient(tile(2, "YYY"), 20, 0, "H", false)) b.place(c, 1);
+    // two laid hedges that DON'T touch each other — each anchors to its own run
+    const move: PlacedTile[] = [
+      { tileId: 3, cells: orient(tile(3, "GGG"), 0, 1, "H", false) }, // under the green run
+      { tileId: 4, cells: orient(tile(4, "YYY"), 20, 1, "H", false) }, // under the yellow run
+    ];
+    expect(validateMove(b, move).ok).toBe(true);
+  });
+
+  it("rejects a multi-hedge move where one run floats free of the board", () => {
+    const b = new Board();
+    for (const c of orient(tile(1, "GGG"), 0, 0, "H", false)) b.place(c, 1);
+    const move: PlacedTile[] = [
+      { tileId: 2, cells: orient(tile(2, "GGG"), 0, 1, "H", false) }, // links to the board
+      { tileId: 3, cells: orient(tile(3, "GGG"), 40, 40, "H", false) }, // floating in empty space
+    ];
+    expect(validateMove(b, move).ok).toBe(false);
+  });
 });
 
 describe("move generation", () => {
