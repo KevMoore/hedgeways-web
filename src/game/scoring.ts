@@ -63,6 +63,43 @@ export function findEnclosed(board: Board): Set<string> {
   return enclosed;
 }
 
+/** Acres in one contiguous field per herd-bonus point — a bigger open pasture
+ *  accommodates a bigger herd. Tunable: lower = more bonus. */
+export const ACRES_PER_HERD = 3;
+
+/**
+ * "Animals accommodated" bonus for one farmer's owned acres: each of their
+ * CONNECTED fields houses a herd sized to the pasture, scoring +1 per full
+ * ACRES_PER_HERD acres in that field. So a single 6-acre field beats three
+ * scattered 2-acre pens — rewarding farmers who consolidate land into big
+ * open pastures. Pure: engine + tests share it.
+ */
+export function pastureBonus(cells: Iterable<string>, acresPerHerd = ACRES_PER_HERD): number {
+  const set = cells instanceof Set ? (cells as Set<string>) : new Set(cells);
+  const seen = new Set<string>();
+  let bonus = 0;
+  for (const start of set) {
+    if (seen.has(start)) continue;
+    let size = 0;
+    const stack = [start];
+    seen.add(start);
+    while (stack.length) {
+      const k = stack.pop()!;
+      size++;
+      const [x, y] = k.split(",").map(Number);
+      for (const [dx, dy] of DIRS) {
+        const nk = key(x + dx, y + dy);
+        if (set.has(nk) && !seen.has(nk)) {
+          seen.add(nk);
+          stack.push(nk);
+        }
+      }
+    }
+    bonus += Math.floor(size / acresPerHerd);
+  }
+  return bonus;
+}
+
 /** Group enclosed cells into connected fields (for FX / reporting). */
 export function fields(enclosed: Set<string>): string[][] {
   const seen = new Set<string>();

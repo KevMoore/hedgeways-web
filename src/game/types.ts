@@ -43,6 +43,7 @@ export interface Player {
   hand: Tile[];
   score: number; // acres enclosed (pure, rules-authoritative)
   bonus: number; // streak/mega flair points — extra on top of acres
+  herdBonus: number; // "animals accommodated" — +1 per ACRES_PER_HERD acres in each owned field
   streak: number; // consecutive own turns that sealed ≥1 acre
   colour: string; // player colour (fills their claimed acres)
   animal: string; // livestock emoji stamped on their acres

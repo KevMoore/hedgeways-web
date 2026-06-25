@@ -817,7 +817,7 @@ export class Scene {
   private rebuildSwarms(): void {
     const target = this.enclosed.size === 0 ? 0 : Math.min(BEE_SWARM_CAP, Math.max(1, Math.round(this.enclosed.size / 6)));
     if (this.swarms.length > target) this.swarms.length = target;
-    const perSwarm = Math.min(BEE_MAX, 18 + Math.round(this.enclosed.size * 0.9));
+    const perSwarm = Math.min(BEE_MAX, 4 + Math.round(this.enclosed.size * 0.25));
     while (this.swarms.length < target) {
       const [cx, cy] = this.randomFieldCentre();
       this.swarms.push({
@@ -830,8 +830,11 @@ export class Scene {
         bees: [],
       });
     }
-    // grow each swarm toward the current target size (never shrink — looks odd)
-    for (const s of this.swarms) while (s.bees.length < perSwarm) s.bees.push(this.makeBee());
+    // match each swarm to the current target size (grow or trim)
+    for (const s of this.swarms) {
+      while (s.bees.length < perSwarm) s.bees.push(this.makeBee());
+      if (s.bees.length > perSwarm) s.bees.length = perSwarm;
+    }
   }
 
   private updateSwarms(dt: number): void {
@@ -867,13 +870,13 @@ export class Scene {
   private drawSwarms(): void {
     const ctx = this.ctx;
     const f = this.t / 1000;
-    const dot = Math.max(0.6, this.scale * 0.022);
+    const dot = Math.max(0.5, this.scale * 0.012);
     for (const s of this.swarms) {
-      // faint haze so the cluster reads as one drifting cloud
+      // very faint haze so the sparse cluster still reads as one drifting wisp
       const [cx0, cy0] = this.worldToScreen(s.cx, s.cy);
-      ctx.fillStyle = "rgba(120,110,55,0.06)";
+      ctx.fillStyle = "rgba(120,110,55,0.035)";
       ctx.beginPath();
-      ctx.ellipse(cx0, cy0, this.scale * 0.36, this.scale * 0.28, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx0, cy0, this.scale * 0.3, this.scale * 0.23, 0, 0, Math.PI * 2);
       ctx.fill();
       for (const b of s.bees) {
         const ox = b.r * Math.sin(f * b.fx + b.px) + b.r2 * Math.sin(f * b.gx + b.qx);
