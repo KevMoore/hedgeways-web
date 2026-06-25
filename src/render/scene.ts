@@ -557,6 +557,10 @@ export class Scene {
     c.style.touchAction = "none";
 
     c.addEventListener("pointerdown", (e) => {
+      // If a tile-drag or rotate-icon press is already in flight, ignore
+      // any additional touches — they must not start a pan / pinch on top
+      // of the active gesture.
+      if (claimedPointer !== -1 || rotatePointer !== -1) return;
       // First-finger only: rotate-icon tap (highest priority — sits above
       // tiles and ghost). If this pointerdown lands on the icon, route the
       // gesture into rotate mode (no pan, no tile pickup).
