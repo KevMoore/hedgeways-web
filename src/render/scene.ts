@@ -33,6 +33,36 @@ interface Critter {
   phase: number;
 }
 
+/** A spot a bird can perch — the outward leafy edge of a hedge cell. wx/wy is
+ *  the world point on that edge; side is 0=N,1=E,2=S,3=W (for facing). */
+interface PerchSlot {
+  wx: number;
+  wy: number;
+  side: number;
+}
+
+/** Decorative bird. No gameplay role: it circles over enclosed acres and
+ *  settles on hedge edges, flushing when a tile is laid near its perch. */
+interface Bird {
+  x: number;
+  y: number;
+  state: "perch" | "circle" | "descend";
+  facing: number; // 1 right, -1 left
+  phase: number; // per-bird timing offset (flap/bob)
+  lastX: number; // previous x, for deriving facing in flight
+  // perch / descend target
+  perchWx: number;
+  perchWy: number;
+  perchSide: number;
+  bobUntil: number; // when a perched bird spontaneously takes off again
+  // circle
+  cx: number;
+  cy: number;
+  cr: number;
+  ang: number;
+  circleUntil: number; // when to stop circling and descend to a perch
+}
+
 const MIN_SCALE = 18;
 const MAX_SCALE = 110;
 const TAP_SLOP = 12; // px of finger drift still treated as a tap (not a pan)
@@ -40,6 +70,9 @@ const POP_MS = 320; // tile placement pop-in
 const ACRE_POP_MS = 1300; // floating "+N acres" lifetime
 const BURST_MS = 1100; // enclosure celebration spark lifetime
 const IDLE_FRAME_MS = 1000 / 30; // cap ambient-livestock redraws at ~30fps
+const BIRD_CAP = 14; // max decorative birds on the board (perf)
+const BIRD_FLUSH_R = 2.5; // a tile within this many cells of a perch flushes the bird
+const BIRD_DISTURB_MS = 3000; // a placed tile keeps birds away from its area this long
 
 export class Scene {
   private ctx: CanvasRenderingContext2D;
@@ -130,6 +163,13 @@ export class Scene {
   private critters = new Map<string, Critter>(); // home-cell key -> roaming animal
   private critterComp = new Map<string, string[]>(); // enclosed cell -> its field's cells
   private reduceMotion = prefersReducedMotion();
+  /** Decorative birds (always animate, even under reduce-motion — by request). */
+  private birds: Bird[] = [];
+  private perches: PerchSlot[] = []; // outward hedge edges, recomputed each syncBoard
+  /** Live valid-ghost cells — birds avoid re-perching near a hovering tile. */
+  private ghostDisturb: Array<[number, number]> = [];
+  /** Recently-placed tiles birds keep clear of (expires). */
+  private placeDisturb: Array<{ x: number; y: number; until: number }> = [];
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
@@ -154,7 +194,9 @@ export class Scene {
         this.connectFlash.size > 0 ||
         panned ||
         this.animating();
-      const idleAnimals = !this.reduceMotion && this.acres.size > 0;
+      // Birds always animate (even under reduce-motion), so they keep the loop
+      // ticking at the ambient ~30fps cadence on their own.
+      const idleAnimals = this.birds.length > 0 || (!this.reduceMotion && this.acres.size > 0);
       // Real-time animation (camera ease, acre pops, bursts) draws every frame.
       // Ambient livestock only needs ~30fps, so throttle that path to halve render
       // work on 60Hz displays (and cut it further on 120Hz) once a field is claimed.
@@ -221,6 +263,10 @@ export class Scene {
     this.bursts = [];
     this.critters.clear();
     this.critterComp.clear();
+    this.birds = [];
+    this.perches = [];
+    this.ghostDisturb = [];
+    this.placeDisturb = [];
     this.firstSyncDone = false;
     this.scale = this.tScale = 56;
     this.camX = this.tCamX = 0.5;
@@ -233,15 +279,27 @@ export class Scene {
     enclosed: Set<string>,
     acres?: Map<string, { colour: string; animal: string }>,
   ): void {
-    // stamp cells that are newly on the board so they pop in
+    // stamp cells that are newly on the board so they pop in (and note them so
+    // birds perched near a freshly-laid tile get flushed off)
     const now = performance.now();
-    for (const k of cells.keys()) if (!this.cells.has(k) && !this.placedAt.has(k)) this.placedAt.set(k, now);
+    const newCells: Array<{ x: number; y: number }> = [];
+    for (const k of cells.keys()) {
+      if (this.cells.has(k)) continue;
+      const [x, y] = k.split(",").map(Number);
+      newCells.push({ x, y });
+      if (!this.placedAt.has(k)) this.placedAt.set(k, now);
+    }
     // forget pop timers for cells no longer present (undo)
     for (const k of [...this.placedAt.keys()]) if (!cells.has(k)) this.placedAt.delete(k);
     this.cells = new Map(cells);
     this.enclosed = new Set(enclosed);
     if (acres) this.acres = new Map(acres);
     this.rebuildCritters();
+    this.rebuildBirds();
+    if (newCells.length) {
+      for (const c of newCells) this.placeDisturb.push({ x: c.x, y: c.y, until: this.nowMs() + BIRD_DISTURB_MS });
+      this.flushNear(newCells, BIRD_FLUSH_R);
+    }
     // Frame a resumed/pre-loaded board once (tiles present on the very first
     // sync); otherwise only re-fit when a tile drifts off-screen, so a fresh
     // game never force-zooms as it grows. Manual recenter (Fit) overrides this.
@@ -403,6 +461,261 @@ export class Scene {
     }
   }
 
+  /** A clock that's valid even before the first draw (this.t is 0 until then). */
+  private nowMs(): number {
+    return this.t || performance.now();
+  }
+
+  /** One perch per hedge cell that shows foliage — birds sit on the cell's
+   *  middle (atop the bush), not its outer edge. Fully-interior cells are bare
+   *  colour panels with no foliage, so they're skipped. */
+  private computePerches(): PerchSlot[] {
+    const out: PerchSlot[] = [];
+    const lift = 0.06; // nudge just above centre so it reads as sitting on top
+    for (const k of this.cells.keys()) {
+      const [x, y] = k.split(",").map(Number);
+      const e = !this.cells.has(key(x + 1, y));
+      const w = !this.cells.has(key(x - 1, y));
+      const interior = !e && !w && this.cells.has(key(x, y - 1)) && this.cells.has(key(x, y + 1));
+      if (interior) continue;
+      const side = e && !w ? 1 : w && !e ? 3 : Math.random() < 0.5 ? 1 : 3; // face toward open space
+      out.push({ wx: x + 0.5, wy: y + 0.5 - lift, side });
+    }
+    return out;
+  }
+
+  /** Points birds should avoid re-perching near: the live ghost + recent placements. */
+  private avoidPoints(): Array<[number, number]> {
+    const now = this.nowMs();
+    this.placeDisturb = this.placeDisturb.filter((d) => d.until > now);
+    const pts: Array<[number, number]> = [];
+    for (const [x, y] of this.ghostDisturb) pts.push([x + 0.5, y + 0.5]);
+    for (const d of this.placeDisturb) pts.push([d.x + 0.5, d.y + 0.5]);
+    return pts;
+  }
+
+  /** Pick a free perch away from other birds and any disturbance; null = none. */
+  private freePerch(): PerchSlot | null {
+    if (!this.perches.length) return null;
+    const taken = new Set(
+      this.birds
+        .filter((b) => b.state !== "circle")
+        .map((b) => `${Math.round(b.perchWx * 100)},${Math.round(b.perchWy * 100)}`),
+    );
+    const slotId = (s: PerchSlot) => `${Math.round(s.wx * 100)},${Math.round(s.wy * 100)}`;
+    const open = this.perches.filter((s) => !taken.has(slotId(s)));
+    if (!open.length) return null;
+    const avoid = this.avoidPoints();
+    const safe = open.filter((s) => !avoid.some(([ax, ay]) => Math.hypot(s.wx - ax, s.wy - ay) < BIRD_FLUSH_R));
+    const pool = safe.length ? safe : open; // no safe perch -> any open (bird keeps circling otherwise)
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  /** Send a bird up to wheel over a random enclosed acre before re-perching. */
+  private launchBird(b: Bird): void {
+    const [cx, cy] = this.randomFieldCentre();
+    b.state = "circle";
+    b.cx = cx;
+    b.cy = cy;
+    b.cr = 0.9 + Math.random() * 1.1;
+    b.ang = Math.random() * Math.PI * 2;
+    b.circleUntil = this.nowMs() + 2500 + Math.random() * 2500;
+  }
+
+  private randomFieldCentre(): [number, number] {
+    if (this.enclosed.size) {
+      const ks = [...this.enclosed];
+      const [x, y] = ks[Math.floor(Math.random() * ks.length)].split(",").map(Number);
+      return [x + 0.5, y + 0.5];
+    }
+    return [this.camX, this.camY];
+  }
+
+  /** Keep the bird count scaled to enclosed acres (capped); recompute perches. */
+  private rebuildBirds(): void {
+    this.perches = this.computePerches();
+    const target = this.enclosed.size === 0 ? 0 : Math.min(BIRD_CAP, Math.max(1, Math.round(this.enclosed.size / 1.5)));
+    if (this.birds.length > target) this.birds.length = target;
+    while (this.birds.length < target) {
+      const slot = this.freePerch();
+      const phase = Math.random();
+      if (slot) {
+        this.birds.push({
+          x: slot.wx,
+          y: slot.wy,
+          state: "perch",
+          facing: slot.side === 1 ? 1 : slot.side === 3 ? -1 : Math.random() < 0.5 ? -1 : 1,
+          phase,
+          lastX: slot.wx,
+          perchWx: slot.wx,
+          perchWy: slot.wy,
+          perchSide: slot.side,
+          bobUntil: this.nowMs() + 4000 + Math.random() * 12000,
+          cx: 0,
+          cy: 0,
+          cr: 1,
+          ang: 0,
+          circleUntil: 0,
+        });
+      } else {
+        const [cx, cy] = this.randomFieldCentre();
+        const b: Bird = {
+          x: cx,
+          y: cy,
+          state: "circle",
+          facing: 1,
+          phase,
+          lastX: cx,
+          perchWx: cx,
+          perchWy: cy,
+          perchSide: 0,
+          bobUntil: 0,
+          cx,
+          cy,
+          cr: 1,
+          ang: 0,
+          circleUntil: 0,
+        };
+        this.launchBird(b);
+        this.birds.push(b);
+      }
+    }
+  }
+
+  /** Flush any PERCHED bird whose perch is within `r` cells of a given cell. */
+  private flushNear(cells: Array<{ x: number; y: number }>, r: number): void {
+    if (!cells.length || !this.birds.length) return;
+    for (const b of this.birds) {
+      if (b.state !== "perch") continue;
+      for (const c of cells) {
+        if (Math.hypot(b.perchWx - (c.x + 0.5), b.perchWy - (c.y + 0.5)) <= r) {
+          this.launchBird(b);
+          break;
+        }
+      }
+    }
+  }
+
+  private updateBirds(dt: number): void {
+    const now = this.nowMs();
+    for (const b of this.birds) {
+      if (b.state === "perch") {
+        if (now >= b.bobUntil) this.launchBird(b); // spontaneous re-perch keeps them lively
+        continue;
+      }
+      b.lastX = b.x;
+      if (b.state === "circle") {
+        b.ang += dt * 0.0026;
+        b.x = b.cx + Math.cos(b.ang) * b.cr;
+        b.y = b.cy + Math.sin(b.ang) * b.cr * 0.7; // squashed circle reads as overhead perspective
+        if (now >= b.circleUntil) {
+          const slot = this.freePerch();
+          if (slot) {
+            b.perchWx = slot.wx;
+            b.perchWy = slot.wy;
+            b.perchSide = slot.side;
+            b.state = "descend";
+          } else {
+            b.circleUntil = now + 1500; // nowhere safe yet — keep wheeling
+          }
+        }
+      } else {
+        // descend: glide toward the chosen perch, then settle
+        const dx = b.perchWx - b.x;
+        const dy = b.perchWy - b.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 0.06) {
+          b.x = b.perchWx;
+          b.y = b.perchWy;
+          b.state = "perch";
+          b.bobUntil = now + 8000 + Math.random() * 12000;
+          b.facing = b.perchSide === 1 ? 1 : b.perchSide === 3 ? -1 : Math.random() < 0.5 ? -1 : 1;
+          continue;
+        }
+        const sp = Math.min(d, 0.0045 * dt);
+        b.x += (dx / d) * sp;
+        b.y += (dy / d) * sp;
+      }
+      if (Math.abs(b.x - b.lastX) > 0.001) b.facing = b.x > b.lastX ? 1 : -1;
+    }
+  }
+
+  private drawBirds(): void {
+    const ctx = this.ctx;
+    const now = this.t;
+    for (const b of this.birds) {
+      const [sx, sy] = this.worldToScreen(b.x, b.y);
+      if (b.state === "perch") {
+        const bob = Math.sin(now / 320 + b.phase * 6.28) * this.scale * 0.02;
+        this.drawPerchedBird(sx, sy + bob, b.facing);
+      } else {
+        const alt = this.scale * 0.5; // lift the bird; its shadow stays on the ground to imply height
+        ctx.save();
+        ctx.fillStyle = "rgba(20,30,18,0.16)";
+        ctx.beginPath();
+        ctx.ellipse(sx, sy, this.scale * 0.08, this.scale * 0.035, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        const flap = Math.sin(now / 90 + b.phase * 6.28);
+        this.drawFlyingBird(sx, sy - alt, b.facing, flap);
+      }
+    }
+  }
+
+  private drawPerchedBird(cx: number, cy: number, facing: number): void {
+    const s = this.scale * 0.1;
+    if (s < 3) return; // too small to read when zoomed out
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(facing, 1);
+    ctx.fillStyle = "#3a3a44";
+    ctx.beginPath(); // body
+    ctx.ellipse(0, 0, s, s * 0.7, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath(); // tail
+    ctx.moveTo(-s * 0.6, -s * 0.1);
+    ctx.lineTo(-s * 1.7, -s * 0.5);
+    ctx.lineTo(-s * 0.7, s * 0.35);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath(); // head
+    ctx.arc(s * 0.75, -s * 0.5, s * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#e0a23a"; // beak
+    ctx.beginPath();
+    ctx.moveTo(s * 1.1, -s * 0.55);
+    ctx.lineTo(s * 1.55, -s * 0.45);
+    ctx.lineTo(s * 1.1, -s * 0.35);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private drawFlyingBird(cx: number, cy: number, facing: number, flap: number): void {
+    const s = this.scale * 0.18;
+    if (s < 4) return;
+    const ctx = this.ctx;
+    const wingY = -flap * s * 0.5; // wing tips rise and fall
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(facing, 1);
+    ctx.strokeStyle = "#33333b";
+    ctx.lineWidth = Math.max(1.5, s * 0.16);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath(); // gull "M" silhouette: two wings sweeping from a centre dip
+    ctx.moveTo(-s, wingY);
+    ctx.quadraticCurveTo(-s * 0.4, s * 0.2, 0, 0);
+    ctx.quadraticCurveTo(s * 0.4, s * 0.2, s, wingY);
+    ctx.stroke();
+    ctx.fillStyle = "#33333b"; // small body lump
+    ctx.beginPath();
+    ctx.ellipse(0, s * 0.05, s * 0.12, s * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   /** Re-fit only if part of the board has drifted outside the viewport. */
   ensureVisible(): void {
     if (this.cells.size === 0) return;
@@ -556,6 +869,15 @@ export class Scene {
 
   setGhost(cells: PlacedCell[] | null, valid: boolean): void {
     this.ghost = cells && cells.length ? { cells, valid } : null;
+    // A valid ghost hovering near a perch spooks the bird off early; while it
+    // lingers, birds also avoid re-perching there (ghostDisturb). Only perched
+    // birds flush, so the per-frame setGhost spam is idempotent.
+    if (this.ghost && valid) {
+      this.ghostDisturb = this.ghost.cells.map((c) => [c.x, c.y] as [number, number]);
+      this.flushNear(this.ghost.cells, BIRD_FLUSH_R);
+    } else {
+      this.ghostDisturb = [];
+    }
     this.needsDraw = true;
   }
 
@@ -990,10 +1312,18 @@ export class Scene {
     }
 
     // free-range livestock roaming inside the fields (only if the sheet loaded)
+    const ambientDt = Math.min(60, now - this.lastT);
     if (this.critters.size) {
-      const dt = this.reduceMotion ? 0 : Math.min(60, now - this.lastT);
+      const dt = this.reduceMotion ? 0 : ambientDt;
       if (dt > 0) this.updateCritters(dt);
       this.drawCritters();
+    }
+    // decorative birds — above the board/critters, below the ghost + UI. They
+    // animate regardless of reduce-motion (by request), so they use ambientDt
+    // directly rather than the motion-gated critter dt.
+    if (this.birds.length) {
+      this.updateBirds(ambientDt);
+      this.drawBirds();
     }
 
     // highlights — quiet hint that the selected tile could sit here (a small
