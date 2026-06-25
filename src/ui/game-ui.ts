@@ -351,6 +351,24 @@ export class GameUI {
     return false;
   }
 
+  /** True iff every pending hedge physically fits: no two pendings share a
+   *  cell, and none sits on a committed hedge or enclosed acre. Colour /
+   *  adjacency rules are deliberately NOT checked here — those stay deferred to
+   *  Confirm. Backstops the input guards so Confirm can never dead-end at a
+   *  physical-overlap rejection, regardless of how the pending set was reached. */
+  private pendingFits(): boolean {
+    const seen = new Set<string>();
+    for (const p of this.pending)
+      for (const c of p.cells) {
+        const k = key(c.x, c.y);
+        if (seen.has(k)) return false; // two pending hedges overlap
+        if (this.game.board.cells.has(k)) return false; // on a committed hedge
+        if (this.game.board.enclosed.has(k)) return false; // inside an enclosed field
+        seen.add(k);
+      }
+    return true;
+  }
+
   private onTapCell(x: number, y: number): void {
     if (this.busy || this.game.currentPlayer.isBot) return;
     if (this.selectedId == null || this.pending.length >= MAX_LAY) return;
@@ -618,10 +636,13 @@ export class GameUI {
     if (this.pending.length > 0) this.rotateLastPending();
   }
 
-  /** Rotate the most recent pending placement 90° around its anchor. The
-   *  rotation ALWAYS advances by one step (full 360° in four presses) — no
-   *  pre-check against overlap with other pendings or committed cells. Any
-   *  rules violation is caught when the player hits Confirm. */
+  /** Rotate the most recent pending placement 90° around its anchor, landing on
+   *  the next orientation that PHYSICALLY FITS. Rotation obeys the same "can't
+   *  sit on an occupied cell" rule as tap/drag placement, so a spin can never
+   *  silently park a hedge on top of another (which used to slip through to a
+   *  confusing "tiles overlap" rejection only at Confirm). Orientations that
+   *  would overlap are skipped; if none of the other three fit, the tile stays
+   *  put and brays. Colour/adjacency rules remain deferred to Confirm. */
   private rotateLastPending(): void {
     const lastIdx = this.pending.length - 1;
     const last = this.pending[lastIdx];
@@ -629,16 +650,21 @@ export class GameUI {
     const tile = this.game.currentPlayer.hand.find((t) => t.id === last.tileId);
     if (!tile) return;
     const anchor = last.cells[0];
-    const tryOri = (lastOri + 1) % 4;
-    const [dir, flip] = ALL_ORI[tryOri];
-    const cells = orient(tile, anchor.x, anchor.y, dir, flip);
-    const fromCells = last.cells.map((c) => ({ ...c }));
-    this.pending[lastIdx] = { tileId: tile.id, cells };
-    this.pendingOri[lastIdx] = tryOri;
-    sfx.rotate();
-    this.scene.startRotateAnim(fromCells, cells); // smooth 90° transition
-    this.syncScene();
-    this.updateButtons();
+    for (let step = 1; step <= 3; step++) {
+      const tryOri = (lastOri + step) % 4;
+      const [dir, flip] = ALL_ORI[tryOri];
+      const cells = orient(tile, anchor.x, anchor.y, dir, flip);
+      if (this.overlapsOccupied(cells, lastIdx)) continue; // can't sit here — skip it
+      const fromCells = last.cells.map((c) => ({ ...c }));
+      this.pending[lastIdx] = { tileId: tile.id, cells };
+      this.pendingOri[lastIdx] = tryOri;
+      sfx.rotate();
+      this.scene.startRotateAnim(fromCells, cells); // smooth 90° transition
+      this.syncScene();
+      this.updateButtons();
+      return;
+    }
+    this.flashInvalid(last.cells); // every other orientation overlaps — stay put
   }
 
   private undo(): void {
@@ -981,12 +1007,10 @@ export class GameUI {
 
   private updateButtons(): void {
     const human = !this.game.currentPlayer.isBot && !this.game.gameOver;
+    const canConfirm = human && this.pending.length > 0 && this.pendingFits();
     btn(this.root, "#btn-undo", human && this.pending.length > 0);
-    btn(this.root, "#btn-confirm", human && this.pending.length > 0);
-    (this.root.querySelector("#btn-confirm") as HTMLElement).classList.toggle(
-      "ready",
-      human && this.pending.length > 0,
-    );
+    btn(this.root, "#btn-confirm", canConfirm);
+    (this.root.querySelector("#btn-confirm") as HTMLElement).classList.toggle("ready", canConfirm);
   }
 
   private setStatus(msg: string): void {
