@@ -654,6 +654,12 @@ body {
   color: #d0512f;
   margin-left: 2px;
 }
+.pbonus.herd {
+  color: #5aa23a; /* herd (pasture) bonus reads green, distinct from the 🔥 flair */
+}
+.pbonus i {
+  font-style: normal;
+}
 .board {
   flex: 1 1 0;
   min-height: 0; /* allow the canvas flex item to shrink below its pixel-buffer height */
@@ -970,8 +976,15 @@ body {
     font-size: 14px;
     white-space: nowrap;
   }
+  .pchip .pscore small {
+    display: none; /* drop the decorative 🌿 on phones to make room for bonus tags */
+  }
   .pchip .pbonus {
-    font-size: 10px;
+    font-size: 11px;
+    margin-left: 2px;
+  }
+  .pchip .pbonus i {
+    display: none; /* phones: colour alone distinguishes 🔥 flair (red) from 🐾 herd (green) */
   }
   .bag {
     font-size: 11px;

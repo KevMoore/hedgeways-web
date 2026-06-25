@@ -10,7 +10,7 @@ import {
 } from "./constants";
 import { applyMoveToBoard, generateMoves } from "./moves";
 import { validateMove } from "./placement";
-import { findEnclosed } from "./scoring";
+import { findEnclosed, pastureBonus } from "./scoring";
 import { makeRng, shuffle } from "./rng";
 import type { Cell, Difficulty, Move, Player, Tile } from "./types";
 
@@ -53,11 +53,12 @@ export interface TurnResult {
   bonus?: number; // flair points awarded this move (streak + mega + livestock perk)
   mega?: boolean; // exceptional single move (≥3 acres or ≥2 fields)
   perk?: string; // livestock perk name, set when the perk's +1 fired this move
+  herd?: number; // herd (pasture) bonus GAINED this move
   ended?: boolean;
 }
 
-/** Winning/ranking total: rules-pure acres plus streak/mega flair points. */
-export const totalScore = (p: Player): number => p.score + (p.bonus ?? 0);
+/** Winning/ranking total: rules-pure acres + streak/mega flair + herd bonus. */
+export const totalScore = (p: Player): number => p.score + (p.bonus ?? 0) + (p.herdBonus ?? 0);
 
 const LIVESTOCK_PERK_NAME = Object.fromEntries(LIVESTOCK.map((l) => [l.perk, l.perkName])) as Record<
   LivestockPerk,
@@ -107,6 +108,19 @@ export class Game {
     else this.deal();
   }
 
+  /** Recompute every farmer's herd (pasture) bonus from current ownership.
+   *  Each farmer's owned acres are grouped into connected fields and scored
+   *  with pastureBonus. Called after any change to acreOwner. */
+  private recomputeHerdBonus(): void {
+    const byPlayer = new Map<number, Set<string>>();
+    for (const [k, id] of this.board.acreOwner) {
+      let s = byPlayer.get(id);
+      if (!s) byPlayer.set(id, (s = new Set()));
+      s.add(k);
+    }
+    for (const p of this.players) p.herdBonus = pastureBonus(byPlayer.get(p.id) ?? []);
+  }
+
   private load(s: GameSnapshot): void {
     this.board.cells = new Map(s.cells.map(([k, c]) => [k, { ...c }]));
     this.board.enclosed = new Set(s.enclosed);
@@ -118,6 +132,7 @@ export class Game {
       ...p,
       hand: p.hand.map((t) => ({ id: t.id, segments: [...t.segments] })),
       bonus: p.bonus ?? 0, // backfill saves written before streak flair existed
+      herdBonus: p.herdBonus ?? 0, // recomputed below from surviving ownership
       streak: p.streak ?? 0,
       colour: p.colour ?? PLAYER_KITS[i % PLAYER_KITS.length].colour,
       animal: p.animal ?? PLAYER_KITS[i % PLAYER_KITS.length].animal,
@@ -139,6 +154,7 @@ export class Game {
     const owned = new Map<number, number>();
     for (const id of this.board.acreOwner.values()) owned.set(id, (owned.get(id) ?? 0) + 1);
     for (const p of this.players) p.score = owned.get(p.id) ?? 0;
+    this.recomputeHerdBonus(); // derive herd bonus from the surviving ownership
   }
 
   /** Deep, serializable snapshot of the whole game (for save/resume) — never aliases live state. */
@@ -169,6 +185,7 @@ export class Game {
       hand: this.bag.splice(0, HAND_SIZE),
       score: 0,
       bonus: 0,
+      herdBonus: 0,
       streak: 0,
       colour: p.colour ?? PLAYER_KITS[id % PLAYER_KITS.length].colour,
       animal: p.animal ?? PLAYER_KITS[id % PLAYER_KITS.length].animal,
@@ -242,8 +259,14 @@ export class Game {
     const bonus = scored > 0 ? streakBonus + (mega ? 1 : 0) + perkBonus : 0;
     player.bonus += bonus;
 
+    // herd ("animals accommodated") bonus: recompute every farmer's pasture
+    // bonus from current ownership, and note how much THIS move gained.
+    const herdBefore = player.herdBonus;
+    this.recomputeHerdBonus();
+    const herdGain = player.herdBonus - herdBefore;
+
     this.consecutiveSkips = 0;
-    const flair = { scored, newlyEnclosed: newly, fields, streak: player.streak, bonus, mega, perk: perkName };
+    const flair = { scored, newlyEnclosed: newly, fields, streak: player.streak, bonus, mega, perk: perkName, herd: herdGain };
 
     // replenish
     while (player.hand.length < HAND_SIZE && this.bag.length > 0) player.hand.push(this.bag.pop()!);

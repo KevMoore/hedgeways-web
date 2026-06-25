@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Board, orient } from "../../src/game/board";
 import { validateMove } from "../../src/game/placement";
-import { findEnclosed, fields } from "../../src/game/scoring";
+import { findEnclosed, fields, pastureBonus, ACRES_PER_HERD } from "../../src/game/scoring";
 import { generateMoves } from "../../src/game/moves";
 import { FARMERS, LIVESTOCK, livestockPerkFires } from "../../src/game/constants";
 import type { Colour, PlacedTile, Tile } from "../../src/game/types";
@@ -68,6 +68,29 @@ describe("enclosure", () => {
     ring(b, walls);
     const enc = findEnclosed(b);
     expect(enc.size).toBe(4); // 2x2 interior
+  });
+});
+
+describe("herd (pasture) bonus", () => {
+  const cells = (...ks: [number, number][]) => new Set(ks.map(([x, y]) => key(x, y)));
+  it("scores +1 per ACRES_PER_HERD acres in a single connected field", () => {
+    // a 2x3 block = 6 connected acres
+    const f = cells([0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]);
+    expect(pastureBonus(f)).toBe(Math.floor(6 / ACRES_PER_HERD));
+  });
+  it("rewards one big field over the same acres split into pens", () => {
+    const big = cells([0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0]); // 6 in a row
+    const pens = cells([0, 0], [1, 0], [4, 0], [5, 0], [8, 0], [9, 0]); // three 2-acre pens
+    expect(pastureBonus(big)).toBe(2);
+    expect(pastureBonus(pens)).toBe(0); // sub-threshold pens accommodate no herd
+  });
+  it("sums the bonus across a farmer's separate fields", () => {
+    // a 4-acre field (+1) plus a far 3-acre field (+1)
+    const f = cells([0, 0], [1, 0], [2, 0], [3, 0], [8, 0], [9, 0], [10, 0]);
+    expect(pastureBonus(f)).toBe(2);
+  });
+  it("is empty for no acres", () => {
+    expect(pastureBonus(new Set())).toBe(0);
   });
 });
 

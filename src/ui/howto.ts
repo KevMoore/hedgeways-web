@@ -1,5 +1,6 @@
 import gsap from "gsap";
 import { COLOUR_HEX, COLOUR_HEX_DARK, HAND_SIZE, LIVESTOCK, MAX_LAY, PLAYER_KITS } from "../game/constants";
+import { ACRES_PER_HERD } from "../game/scoring";
 import type { Colour } from "../game/types";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -268,6 +269,23 @@ export function showHowTo(): void {
     ),
   );
 
+  // Herd bonus — bigger connected pastures accommodate bigger herds.
+  const herdKit = PLAYER_KITS[2]; // 🐑
+  const bigField = grid(["GGGGG", "GaaaG", "GaaaG", "GGGGG"]);
+  ([[1, 1], [1, 2], [1, 3], [2, 1], [2, 2], [2, 3]] as [number, number][]).forEach(([r, c], i) =>
+    setCell(bigField.cell(r, c), "acre", { tint: herdKit.colour, animal: i % 2 === 0 ? herdKit.animal : "" }),
+  );
+  const pen = grid(["GGG", "GaG", "GGG"]);
+  setCell(pen.cell(1, 1), "acre", { tint: herdKit.colour, animal: herdKit.animal });
+  card.append(
+    section(
+      "🐑",
+      "Room to roam",
+      `Big open pastures house big herds. On top of each acre, a connected field earns a herd bonus of +1 for every ${ACRES_PER_HERD} acres it spans — so one wide field is worth more than the same land split into little pens.`,
+      diagram(bigField.node, "→ 6 acres = +2 🐾", pen.node, "→ 1 acre = +0"),
+    ),
+  );
+
   // Bonus acres — flair points (🔥) stacked on top of rules-pure acres.
   const bonusList = el("ul", "ht-controls ht-bonuses");
   const bonusRows: [string, string][] = [
@@ -293,7 +311,7 @@ export function showHowTo(): void {
     section(
       "🚜",
       "Sundown & the harvest",
-      "The day ends when a farmer plants their last hedge (empty hand and empty bag). The farmer with the most acres wins the harvest. Sealed fields are locked — no hedges may be planted inside them.",
+      "The day ends when a farmer plants their last hedge (empty hand and empty bag). The farmer with the highest total — acres plus herd and flair bonuses — wins the harvest. Sealed fields are locked — no hedges may be planted inside them.",
     ),
   );
 

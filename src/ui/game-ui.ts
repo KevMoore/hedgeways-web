@@ -296,6 +296,7 @@ export class GameUI {
     const acresTxt = `${scored} acre${scored === 1 ? "" : "s"}`;
     const fieldsTxt = fields >= 2 ? ` in ${fields} fields` : "";
     const bonusTxt = (res.bonus ?? 0) > 0 ? ` +${res.bonus}🔥` : "";
+    const herdTxt = (res.herd ?? 0) > 0 ? ` +${res.herd}🐾` : "";
     const perkTxt = res.perk ? ` · ${res.perk}!` : "";
 
     let head = "";
@@ -306,7 +307,7 @@ export class GameUI {
     else if (res.mega) (head = "Bumper field! "), (hot = true);
     else if (res.perk) hot = true; // a fired perk earns the warmer styling too
 
-    callout(`${head}${who} fences in ${acresTxt}${fieldsTxt}${perkTxt}${bonusTxt}`, hot ? "streak" : "score");
+    callout(`${head}${who} fences in ${acresTxt}${fieldsTxt}${perkTxt}${bonusTxt}${herdTxt}`, hot ? "streak" : "score");
     if (hot) {
       sfx.streak(streak);
       if (res.perk) sfx.bonus(); // a bright little flourish when a livestock perk pays off
@@ -931,7 +932,9 @@ export class GameUI {
       const active = p.id === this.game.current && !this.game.gameOver;
       chip.className = "pchip" + (active ? " active" : "") + (total === lead && lead > 0 ? " lead" : "");
       chip.style.setProperty("--pc", p.colour);
-      const bonusTag = p.bonus > 0 ? `<span class="pbonus" title="${p.score} acres + ${p.bonus} bonus 🔥">+${p.bonus}🔥</span>` : "";
+      const tip = `${p.score} acres${p.bonus > 0 ? ` + ${p.bonus} flair 🔥` : ""}${p.herdBonus > 0 ? ` + ${p.herdBonus} herd 🐾` : ""}`;
+      const bonusTag = p.bonus > 0 ? `<span class="pbonus" title="${tip}">+${p.bonus}<i>🔥</i></span>` : "";
+      const herdTag = p.herdBonus > 0 ? `<span class="pbonus herd" title="${tip} — bigger pastures house bigger herds">+${p.herdBonus}<i>🐾</i></span>` : "";
       const usingSprite = !!p.farmerId && getFarmerSprites().knows(p.farmerId);
       const portraitHtml = usingSprite
         ? `<span class="pfarmer"></span>`
@@ -940,15 +943,16 @@ export class GameUI {
         portraitHtml +
         `<span class="pname">${p.name}</span>` +
         `<span class="pscore">${total}<small>🌿</small></span>` +
-        bonusTag;
+        bonusTag +
+        herdTag;
       ps.appendChild(chip);
       // Mount the animated farmer head-shot into the placeholder span. Active
       // player gets idle bob; others render a single static frame (cheap).
       if (usingSprite && p.farmerId) {
         const host = chip.querySelector(".pfarmer") as HTMLElement | null;
         if (host) {
-          // Smaller head-shot on phones so 3-4 chips fit the single score row.
-          const portraitSize = window.innerWidth <= 600 ? 24 : 30;
+          // Smaller head-shot on phones so 3-4 chips + bonus tags fit the score row.
+          const portraitSize = window.innerWidth <= 600 ? 22 : 30;
           const w = mountFarmerPortrait(host, p.farmerId, {
             size: portraitSize,
             crop: "head",
@@ -1138,7 +1142,10 @@ export class GameUI {
         <h2>${winLine}</h2>
         <table>${standings
           .map((p, i) => {
-            const bonusNote = p.bonus > 0 ? `<small> (${p.score} + ${p.bonus}🔥)</small>` : "";
+            const parts: string[] = [];
+            if (p.bonus > 0) parts.push(`${p.bonus}🔥`);
+            if (p.herdBonus > 0) parts.push(`${p.herdBonus}🐾`);
+            const bonusNote = parts.length ? `<small> (${p.score} + ${parts.join(" + ")})</small>` : "";
             const portrait = p.farmerId && getFarmerSprites().knows(p.farmerId)
               ? `<span class="endfarmer" data-fid="${p.farmerId}" data-pos="${i}"></span>`
               : `${p.animal}`;
