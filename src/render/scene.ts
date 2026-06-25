@@ -76,6 +76,11 @@ export class Scene {
   dragStart: ((cellX: number, cellY: number, clientX: number, clientY: number) => boolean) | null = null;
   dragMove: ((cellX: number, cellY: number, clientX: number, clientY: number) => void) | null = null;
   dragEnd: ((cellX: number, cellY: number, clientX: number, clientY: number) => void) | null = null;
+  /** World cell to anchor a floating rotate icon to (top-right corner of the
+   *  cell). When null, no icon is drawn. */
+  private rotateAt: { x: number; y: number } | null = null;
+  /** Fires when the user taps the floating rotate icon. */
+  rotateRequestHandler: (() => void) | null = null;
   private hoverCell = "";
   private rafId = 0;
   private alive = true;
@@ -102,6 +107,7 @@ export class Scene {
         this.acrePops.length ||
         this.bursts.length ||
         this.dangerCells.size > 0 ||
+        this.ghost !== null || // pulse the held-tile ghost while it exists
         this.animating();
       const idleAnimals = !this.reduceMotion && this.acres.size > 0;
       // Real-time animation (camera ease, acre pops, bursts) draws every frame.
@@ -395,6 +401,23 @@ export class Scene {
     this.needsDraw = true;
   }
 
+  /** Anchor the floating rotate icon at this world cell (top-right corner of
+   *  the cell), or null to hide it. */
+  setRotateAt(cell: { x: number; y: number } | null): void {
+    this.rotateAt = cell;
+    this.needsDraw = true;
+  }
+
+  /** Screen-space bounding box of the floating rotate icon (or null if not
+   *  shown). Used by the tap handler to hit-test the icon. */
+  private rotateIconRect(): { cx: number; cy: number; r: number } | null {
+    if (!this.rotateAt) return null;
+    // Anchor at the top-right corner of the cell (cell extends right+down
+    // from its (x,y), so top-right = (x+1, y) in world space).
+    const [sx, sy] = this.worldToScreen(this.rotateAt.x + 1, this.rotateAt.y);
+    return { cx: sx, cy: sy, r: Math.max(18, this.scale * 0.32) };
+  }
+
   /** Whether anything is currently flashing — used to keep the render loop
    *  ticking at the pulse rate even when the camera is still. */
   hasDanger(): boolean {
@@ -488,11 +511,29 @@ export class Scene {
     /** Single-finger drag claimed by game-ui (e.g. picking up a pending tile).
      *  When set, pointermove/up route to dragMove/dragEnd instead of panning. */
     let claimedPointer = -1;
+    /** Pointer currently pressing the floating rotate icon. */
+    let rotatePointer = -1;
 
     const c = this.canvas;
     c.style.touchAction = "none";
 
     c.addEventListener("pointerdown", (e) => {
+      // First-finger only: rotate-icon tap (highest priority — sits above
+      // tiles and ghost). If this pointerdown lands on the icon, route the
+      // gesture into rotate mode (no pan, no tile pickup).
+      if (pointers.size === 0) {
+        const ri = this.rotateIconRect();
+        if (ri) {
+          const rect = c.getBoundingClientRect();
+          const px = e.clientX - rect.left;
+          const py = e.clientY - rect.top;
+          if (Math.hypot(px - ri.cx, py - ri.cy) <= ri.r + 8) {
+            c.setPointerCapture(e.pointerId);
+            rotatePointer = e.pointerId;
+            return;
+          }
+        }
+      }
       // First-finger only: let game-ui claim the gesture (pick up a pending).
       if (pointers.size === 0 && this.dragStart) {
         const rect = c.getBoundingClientRect();
@@ -568,6 +609,18 @@ export class Scene {
       this.needsDraw = true;
     });
     const up = (e: PointerEvent) => {
+      if (rotatePointer === e.pointerId) {
+        rotatePointer = -1;
+        // Fire if release is still inside the icon (cancel by drifting off).
+        const ri = this.rotateIconRect();
+        if (ri && this.rotateRequestHandler) {
+          const rect = c.getBoundingClientRect();
+          const px = e.clientX - rect.left;
+          const py = e.clientY - rect.top;
+          if (Math.hypot(px - ri.cx, py - ri.cy) <= ri.r + 12) this.rotateRequestHandler();
+        }
+        return;
+      }
       if (claimedPointer === e.pointerId) {
         claimedPointer = -1;
         if (this.dragEnd) {
@@ -588,6 +641,10 @@ export class Scene {
     };
     c.addEventListener("pointerup", up);
     c.addEventListener("pointercancel", (e) => {
+      if (rotatePointer === e.pointerId) {
+        rotatePointer = -1;
+        return;
+      }
       if (claimedPointer === e.pointerId) {
         claimedPointer = -1;
         if (this.dragEnd) {
@@ -697,17 +754,21 @@ export class Scene {
       ctx.fill();
     }
 
-    // ghost
+    // ghost — pulses gently to indicate it's the "selected / in-hand" tile
     if (this.ghost) {
       const gKeys = new Set(this.ghost.cells.map((c) => key(c.x, c.y)));
       const hasHedge = (x: number, y: number) => this.cells.has(key(x, y)) || gKeys.has(key(x, y));
+      // Soft 1.4Hz pulse: alpha breathes 0.45→0.75, scale 0.97→1.03.
+      const pulse = (Math.sin(now / 220) + 1) / 2; // 0..1
+      const ghostAlpha = this.ghost.valid ? 0.5 + pulse * 0.25 : 0.4;
+      const ghostScale = this.ghost.valid ? 0.97 + pulse * 0.06 : 1;
       for (const c of this.ghost.cells) {
         const mask =
           (hasHedge(c.x, c.y - 1) ? 1 : 0) |
           (hasHedge(c.x + 1, c.y) ? 2 : 0) |
           (hasHedge(c.x, c.y + 1) ? 4 : 0) |
           (hasHedge(c.x - 1, c.y) ? 8 : 0);
-        this.drawHedge(c.x, c.y, c.colour, this.ghost.valid ? 0.55 : 0.4, !this.ghost.valid, 1, mask);
+        this.drawHedge(c.x, c.y, c.colour, ghostAlpha, !this.ghost.valid, ghostScale, mask);
       }
     }
 
@@ -759,9 +820,53 @@ export class Scene {
     }
     ctx.globalAlpha = 1;
 
+    // Floating rotate icon — drawn last so it sits above tiles and effects.
+    const ri = this.rotateIconRect();
+    if (ri) this.drawRotateIcon(ri.cx, ri.cy, ri.r);
+
     ctx.restore();
     this.needsDraw = false;
     this.lastT = this.t;
+  }
+
+  /** Draw a chunky "rotate" disc with a circular arrow. Tappable hit-target. */
+  private drawRotateIcon(cx: number, cy: number, r: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    // shadow
+    ctx.fillStyle = "rgba(20,40,24,0.32)";
+    ctx.beginPath();
+    ctx.arc(cx + 1, cy + 2, r, 0, Math.PI * 2);
+    ctx.fill();
+    // disc
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#234b2f";
+    ctx.lineWidth = Math.max(2, r * 0.14);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // arc arrow
+    const ar = r * 0.55;
+    ctx.strokeStyle = "#234b2f";
+    ctx.lineWidth = Math.max(2, r * 0.18);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.arc(cx, cy, ar, -Math.PI * 0.95, Math.PI * 0.7);
+    ctx.stroke();
+    // arrow head at the open end
+    const tipAng = Math.PI * 0.7;
+    const tipX = cx + Math.cos(tipAng) * ar;
+    const tipY = cy + Math.sin(tipAng) * ar;
+    const head = r * 0.32;
+    ctx.fillStyle = "#234b2f";
+    ctx.beginPath();
+    ctx.moveTo(tipX + head * 0.9, tipY - head * 0.1);
+    ctx.lineTo(tipX - head * 0.2, tipY - head * 0.85);
+    ctx.lineTo(tipX - head * 0.2, tipY + head * 0.65);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
   private drawGrid(vw: number, vh: number): void {

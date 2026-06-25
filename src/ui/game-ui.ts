@@ -39,7 +39,9 @@ export class GameUI {
   private pendingOri: number[] = [];
   private usedIds = new Set<number>();
   private selectedId: number | null = null;
-  private oriIndex = 0;
+  /** Current preview/placement orientation. Default 1 = V (top→bottom) to
+   *  match the hand chip's vertical 3-segment layout. */
+  private oriIndex = 1;
   private busy = false;
   private invalidTimer: number | null = null;
   private botTimer: number | null = null;
@@ -76,6 +78,8 @@ export class GameUI {
     this.scene.dragStart = (x, y) => this.tryPickPending(x, y);
     this.scene.dragMove = (x, y, cx, cy) => this.onPickedMove(x, y, cx, cy);
     this.scene.dragEnd = (x, y, cx, cy) => this.onPickedRelease(x, y, cx, cy);
+    // Floating rotate icon on the board → rotate the most recent pending.
+    this.scene.rotateRequestHandler = () => this.rotate();
 
     root.querySelector("#btn-rotate")!.addEventListener("click", () => this.rotate());
     root.querySelector("#btn-undo")!.addEventListener("click", () => this.undo());
@@ -231,15 +235,9 @@ export class GameUI {
     sfx.place();
     this.scene.setGhost(null, false);
     this.refreshHighlights();
-    this.syncScene();
+    this.syncScene(); // refreshes rotate icon + status from pending
     this.renderHand(false);
     this.updateButtons();
-    const left = 3 - this.pending.length;
-    this.setStatus(
-      left > 0
-        ? `${this.pending.length} hedge${this.pending.length === 1 ? "" : "s"} laid — confirm, or plant up to ${left} more`
-        : `3 hedges laid — confirm to end the day`,
-    );
   }
 
   /** Pointerdown on a board cell — if it's part of a pending tile, pick it
@@ -266,9 +264,8 @@ export class GameUI {
   }
 
   private onPickedMove(x: number, y: number, clientX: number, clientY: number): void {
-    if (this.overHand(clientX, clientY)) {
-      // Hovering over the hand strip — clear the board ghost; we'll restore
-      // to hand on release without placing on the board.
+    if (!this.scene.pointOverBoard(clientX, clientY)) {
+      // Drifted off the board — clear the ghost; release here will un-play.
       this.scene.setGhost(null, false);
       return;
     }
@@ -279,9 +276,9 @@ export class GameUI {
     if (this.selectedId == null) return;
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
-    // If released over the hand strip — un-play: tile stays in hand, picked
-    // origin discarded.
-    if (this.overHand(clientX, clientY)) {
+    // Released anywhere off the board canvas — un-play. Tile returns to hand
+    // with its current orientation preserved so the next pick keeps it.
+    if (!this.scene.pointOverBoard(clientX, clientY)) {
       this.pickedOrigin = null;
       this.selectedId = null;
       this.scene.setGhost(null, false);
@@ -320,14 +317,6 @@ export class GameUI {
     this.syncScene();
     this.renderHand(false);
     this.updateButtons();
-  }
-
-  /** True if the (clientX, clientY) point is over the hand strip element. */
-  private overHand(clientX: number, clientY: number): boolean {
-    const el = this.root.querySelector(".hand") as HTMLElement | null;
-    if (!el) return false;
-    const r = el.getBoundingClientRect();
-    return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
   }
 
   private onHover(x: number, y: number): void {
@@ -378,10 +367,10 @@ export class GameUI {
     if (this.pending.length > 0) this.rotateLastPending();
   }
 
-  /** Rotate the most recent pending placement 90° around its anchor. Tries
-   *  the next orientation; if it would overlap, advances to the one after,
-   *  etc. (so the player still feels a single quarter-turn even when the
-   *  natural next orientation has no room). */
+  /** Rotate the most recent pending placement 90° around its anchor. The
+   *  rotation ALWAYS advances by one step (full 360° in four presses) — no
+   *  pre-check against overlap with other pendings or committed cells. Any
+   *  rules violation is caught when the player hits Confirm. */
   private rotateLastPending(): void {
     const lastIdx = this.pending.length - 1;
     const last = this.pending[lastIdx];
@@ -389,19 +378,14 @@ export class GameUI {
     const tile = this.game.currentPlayer.hand.find((t) => t.id === last.tileId);
     if (!tile) return;
     const anchor = last.cells[0];
-    for (let step = 1; step <= 4; step++) {
-      const tryOri = (lastOri + step) % 4;
-      const [dir, flip] = ALL_ORI[tryOri];
-      const cells = orient(tile, anchor.x, anchor.y, dir, flip);
-      if (this.overlapsOccupied(cells, lastIdx)) continue;
-      this.pending[lastIdx] = { tileId: tile.id, cells };
-      this.pendingOri[lastIdx] = tryOri;
-      sfx.rotate();
-      this.syncScene();
-      this.updateButtons();
-      return;
-    }
-    sfx.invalid(); // no rotation fits at this anchor
+    const tryOri = (lastOri + 1) % 4;
+    const [dir, flip] = ALL_ORI[tryOri];
+    const cells = orient(tile, anchor.x, anchor.y, dir, flip);
+    this.pending[lastIdx] = { tileId: tile.id, cells };
+    this.pendingOri[lastIdx] = tryOri;
+    sfx.rotate();
+    this.syncScene();
+    this.updateButtons();
   }
 
   private undo(): void {
@@ -449,6 +433,41 @@ export class GameUI {
     this.scene.setDangerCells([]);
   }
 
+  /** Anchor the floating rotate icon at the top-right cell of the LAST
+   *  pending tile, or clear if there isn't one. */
+  private refreshRotateIcon(): void {
+    if (this.pending.length === 0) {
+      this.scene.setRotateAt(null);
+      return;
+    }
+    const last = this.pending[this.pending.length - 1];
+    let maxX = -Infinity;
+    let minY = Infinity;
+    for (const c of last.cells) {
+      if (c.x > maxX) maxX = c.x;
+      if (c.y < minY) minY = c.y;
+    }
+    this.scene.setRotateAt({ x: maxX, y: minY });
+  }
+
+  /** Resync the status bar message to reflect the current pending count. */
+  private refreshStatus(): void {
+    if (this.game.gameOver) return;
+    if (this.game.currentPlayer.isBot) return;
+    const n = this.pending.length;
+    if (n === 0) {
+      const hasMove = this.game.hasLegalMove();
+      this.setStatus(hasMove ? `Your turn — drag a hedge onto the field` : `No legal move — you must pass`);
+      return;
+    }
+    const left = 3 - n;
+    this.setStatus(
+      left > 0
+        ? `${n} hedge${n === 1 ? "" : "s"} laid — confirm, or plant up to ${left} more`
+        : `3 hedges laid — confirm to end the day`,
+    );
+  }
+
   passTurn(): void {
     if (this.game.gameOver) return;
     this.game.pass();
@@ -473,6 +492,9 @@ export class GameUI {
     const acres = this.acresMap();
     this.scene.syncBoard(this.workingCells(), this.game.board.enclosed, acres);
     sfx.setAnimals([...acres.values()].map((a) => a.animal)); // drive random ambience
+    // Keep the floating rotate icon + status text in sync with the pending set.
+    this.refreshRotateIcon();
+    this.refreshStatus();
   }
 
   /** enclosed cell -> the owning farmer's colour + animal, for the renderer */
@@ -671,7 +693,7 @@ export class GameUI {
     this.pendingOri = [];
     this.usedIds.clear();
     this.selectedId = null;
-    this.oriIndex = 0;
+    this.oriIndex = 1;
     this.scene.setHighlights(new Map());
     this.scene.setGhost(null, false);
   }
