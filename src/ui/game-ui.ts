@@ -132,10 +132,48 @@ export class GameUI {
     if (!move) {
       this.game.pass();
       callout(`${actor.animal} ${actor.name} passes`, "pass");
-    } else {
-      const res = this.game.commit(move);
-      this.afterCommit(res, actor);
+      this.syncScene();
+      this.beginTurn();
+      return;
     }
+    // Lay each tile visibly with a short pause between, so the human can
+    // see the bot "playing" instead of all tiles popping in at once.
+    void this.botLayMoveAnimated(move, actor);
+  }
+
+  /** Animated bot placement: each tile of the move is appended to `pending`
+   *  in sequence (~360ms apart) with a `place` sfx + the renderer's pop-in,
+   *  then the whole move is committed atomically once the visualisation
+   *  finishes. The engine state isn't touched until commit, so a teardown
+   *  mid-animation cleanly aborts. */
+  private async botLayMoveAnimated(move: Move, actor: { name: string; animal: string; colour?: string }): Promise<void> {
+    this.busy = true;
+    const STEP_MS = 360;
+    for (let i = 0; i < move.tiles.length; i++) {
+      if (!this.alive) return;
+      if (this.game.currentPlayer !== actor) return; // turn changed under us
+      const t = move.tiles[i];
+      this.pending.push({ tileId: t.tileId, cells: t.cells.map((c) => ({ ...c })) });
+      this.pendingOri.push(0); // orientation doesn't matter for the visualisation
+      sfx.place();
+      this.syncScene();
+      if (i < move.tiles.length - 1) {
+        await new Promise<void>((resolve) => {
+          this.botTimer = window.setTimeout(() => {
+            this.botTimer = null;
+            resolve();
+          }, STEP_MS);
+        });
+      }
+    }
+    if (!this.alive) return;
+    // Clear the visualisation pending and commit the real move so scoring,
+    // streaks, and end-of-game checks all run against engine state.
+    this.pending = [];
+    this.pendingOri = [];
+    const res = this.game.commit(move);
+    this.busy = false;
+    this.afterCommit(res, actor);
     this.syncScene();
     this.beginTurn();
   }
