@@ -26,7 +26,7 @@ src/
   game/            # pure engine — no DOM, framework-agnostic
     types.ts       # Colour, Tile, Cell, Player, Move, Difficulty...
     constants.ts   # palette, hand size = 4, max-lay = 3
-    bag.ts         # canonical 52-tile set (TILE_CODES) transcribed from photos
+    bag.ts         # canonical 52-tile set (TILE_CODES); buildBag() scales it per player count
     board.ts       # sparse Map<"x,y",Cell> grid + orient/palindrome helpers
     placement.ts   # validateMove() — Qwirkle-strict colour-match rules
     scoring.ts     # findEnclosed() — exterior flood-fill identifies enclosed acres
@@ -52,7 +52,7 @@ The **engine (`src/game/`) is the source of truth and is UI-agnostic** — `scen
 ## Game rules (authoritative — from the physical rule card)
 
 - **You are farmers competing for land.** Use hedges as boundaries to enclose fields. Every enclosed empty square = 1 acre = 1 point.
-- A **hedge tile** is a 1×3 strip with three coloured segments drawn from {G, Y, B, P}. There are 52 tiles in the bag.
+- A **hedge tile** is a 1×3 strip with three coloured segments drawn from {G, Y, B, P}. The physical game has 52 tiles; the digital version scales the bag with player count (see Key design decisions).
 - A player has a hand of 4 hedges and on each turn lays **1, 2, or 3** hedges then replenishes back to 4 (until the bag is empty).
 - **Placement (Qwirkle-strict):** every orthogonally abutting segment-pair — between laid tiles and existing tiles, and between laid tiles within the same turn — must be the **same colour**. After turn 1, the laid group must also touch ≥1 existing hedge.
 - **Diagonal touches do not enclose** a field — hedges that meet only at a corner leave a gap the outside slips through, so the exterior is flooded with **8-connectivity** (the diagonal gap leaks).
@@ -73,6 +73,7 @@ The **engine (`src/game/`) is the source of truth and is UI-agnostic** — `scen
   - `expert` Information-Set MCTS: determinize hidden bag/hands, root-UCT with cheap random rollouts. **On the empty board the search tree is huge and rollouts are noisy — expert falls back to the `hard` heuristic for the opening move only.**
 - **Move generation** is a depth-1-to-3 DFS with a `limit` breadth cap (early-return on `results >= limit`), since the combinatorial fan-out of (anchors × hand × orientations × positions) is far larger than any AI/UX needs.
 - **Bag is canonical** (`bag.ts` — 52 entries transcribed from the physical tile photos). **Verify against the real set** and correct misreads in `TILE_CODES` — that file is the single source of truth.
+- **Bag scales with player count** (`buildBag(players)`): 26 tiles/player, so 2p→52, 3p→78, 4p→104. The fixed 52-tile bag left 3–4 players with ~half the per-capita material; scaling restores 2-player pacing, land, and fairness without raising stalemate risk (validated by Monte-Carlo self-play — see `docs/bag-size-analysis.md`, harness `scripts/bag-sweep.ts`). Even counts stack whole canonical sets; odd counts add one colour-balanced `HALF_SET`, so **2p is byte-identical to the original and 4p is exactly 2× it**. `bagSizeFor(n)` gives the size; the AI's hidden-bag model (`ai.ts` determinize) rebuilds the same scaled bag, so it must stay in sync with `buildBag`.
 - **Hidden information:** other players' hands and the bag order are hidden from human + bots. ISMCTS samples a consistent hidden state per rollout.
 
 ## Conventions

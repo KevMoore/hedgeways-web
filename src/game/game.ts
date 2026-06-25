@@ -176,7 +176,7 @@ export class Game {
   }
 
   private deal(): void {
-    this.bag = shuffle(buildBag(), this.rng);
+    this.bag = shuffle(buildBag(this.config.players.length), this.rng);
     this.players = this.config.players.map((p, id) => ({
       id,
       name: p.name,

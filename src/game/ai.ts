@@ -106,7 +106,7 @@ function determinize(game: Game, me: number, rng: Rng): SimState {
   const onBoard = new Set<number>();
   for (const c of game.board.cells.values()) onBoard.add(c.tileId);
   const myHandIds = new Set(game.players[me].hand.map((t) => t.id));
-  const unseen = buildBag().filter((t) => !onBoard.has(t.id) && !myHandIds.has(t.id));
+  const unseen = buildBag(game.players.length).filter((t) => !onBoard.has(t.id) && !myHandIds.has(t.id));
   shuffleInPlace(unseen, rng);
 
   const hands: Tile[][] = game.players.map((p, i) =>
