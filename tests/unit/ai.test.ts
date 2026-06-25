@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Game } from "../../src/game/game";
 import { chooseAiMove } from "../../src/game/ai";
 import { makeRng } from "../../src/game/rng";
-import { BAG_SIZE } from "../../src/game/bag";
+import { bagSizeFor } from "../../src/game/bag";
 import type { Colour, Difficulty } from "../../src/game/types";
 
 describe("scoring", () => {
@@ -84,7 +84,7 @@ function placedTileCount(game: Game): number {
 
 function conserved(game: Game): boolean {
   const inHands = game.players.reduce((n, p) => n + p.hand.length, 0);
-  return game.bag.length + inHands + placedTileCount(game) === BAG_SIZE;
+  return game.bag.length + inHands + placedTileCount(game) === bagSizeFor(game.players.length);
 }
 
 function playOut(difficulties: Difficulty[], seed: number, expertIters = 20): Game {
