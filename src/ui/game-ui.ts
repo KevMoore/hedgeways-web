@@ -3,7 +3,6 @@ import { isPalindrome, orient } from "../game/board";
 import { COLOUR_HEX, COLOUR_HEX_DARK, COLOUR_NAME, MAX_LAY } from "../game/constants";
 import { Game, type GameConfig, type GameSnapshot, type TurnResult, totalScore } from "../game/game";
 import { generateMoves } from "../game/moves";
-import { validateMove } from "../game/placement";
 import type { Cell, Colour, Move, Orientation, PlacedTile, Tile } from "../game/types";
 import { COLOURS, key } from "../game/types";
 import gsap from "gsap";
@@ -49,8 +48,6 @@ export class GameUI {
   private alive = true;
   /** low-bag tiers already announced, so each callout fires at most once */
   private bagWarned = new Set<number>();
-  /** anchor cell -> the placement that would result (finger-position = anchor) */
-  private placementByCell = new Map<string, PlacedTile>();
 
   private onQuit: (() => void) | null;
   private onRestart: ((config: GameConfig) => void) | null;
@@ -188,35 +185,53 @@ export class GameUI {
   }
 
   // ---- human input ----
+  /** True iff any of these cells is already occupied (committed tile,
+   * enclosed acre, or another pending). The ONLY pre-confirm constraint —
+   * everything else (adjacency, colour rules) is verified by the engine
+   * when Confirm is pressed. */
+  private overlapsOccupied(cells: PlacedTile["cells"], excludePendingIdx = -1): boolean {
+    for (const c of cells) {
+      const k = key(c.x, c.y);
+      if (this.game.board.cells.has(k)) return true;
+      if (this.game.board.enclosed.has(k)) return true;
+      for (let i = 0; i < this.pending.length; i++) {
+        if (i === excludePendingIdx) continue;
+        if (this.pending[i].cells.some((pc) => pc.x === c.x && pc.y === c.y)) return true;
+      }
+    }
+    return false;
+  }
+
   private onTapCell(x: number, y: number): void {
     if (this.busy || this.game.currentPlayer.isBot) return;
     if (this.selectedId == null || this.pending.length >= MAX_LAY) return;
-    // tap ANY cell a legal placement would cover
-    const candidate = this.placementByCell.get(key(x, y));
-    if (candidate) {
-      this.pending.push(candidate);
-      this.pendingOri.push(this.oriIndex);
-      this.usedIds.add(candidate.tileId);
-      this.selectedId = null;
-      sfx.place();
-      this.scene.setGhost(null, false);
-      this.refreshHighlights();
-      this.syncScene();
-      this.renderHand(false);
-      this.updateButtons();
-      const left = 3 - this.pending.length;
-      this.setStatus(
-        left > 0
-          ? `${this.pending.length} hedge${this.pending.length === 1 ? "" : "s"} laid — confirm, or plant up to ${left} more`
-          : `3 hedges laid — confirm to end the day`,
-      );
-      return;
-    }
-    // invalid spot: brief red feedback in the current orientation
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
     const [dir, flip] = ALL_ORI[this.oriIndex];
-    this.flashInvalid(orient(tile, x, y, dir, flip));
+    const cells = orient(tile, x, y, dir, flip);
+    if (this.overlapsOccupied(cells)) {
+      // can't physically sit there — donkey + show a brief red ghost
+      this.flashInvalid(cells);
+      return;
+    }
+    // Free placement: tile lands exactly where the finger dropped it. Any
+    // adjacency / colour rules are checked when the player presses Confirm.
+    this.pending.push({ tileId: tile.id, cells });
+    this.pendingOri.push(this.oriIndex);
+    this.usedIds.add(tile.id);
+    this.selectedId = null;
+    sfx.place();
+    this.scene.setGhost(null, false);
+    this.refreshHighlights();
+    this.syncScene();
+    this.renderHand(false);
+    this.updateButtons();
+    const left = 3 - this.pending.length;
+    this.setStatus(
+      left > 0
+        ? `${this.pending.length} hedge${this.pending.length === 1 ? "" : "s"} laid — confirm, or plant up to ${left} more`
+        : `3 hedges laid — confirm to end the day`,
+    );
   }
 
   private onHover(x: number, y: number): void {
@@ -224,10 +239,10 @@ export class GameUI {
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
     const [dir, flip] = ALL_ORI[this.oriIndex];
-    // Ghost always anchors at the finger's cell. Green when that exact anchor
-    // is a legal placement; red otherwise. No auto-snap to a different cell.
     const cells = orient(tile, x, y, dir, flip);
-    const valid = this.placementByCell.has(key(x, y));
+    // Ghost colour reflects only whether the tile fits physically. Adjacency
+    // / colour rules are deferred to Confirm.
+    const valid = !this.overlapsOccupied(cells);
     this.scene.setGhost(cells, valid);
   }
 
@@ -285,27 +300,17 @@ export class GameUI {
       const tryOri = allowed[(startPos + i) % allowed.length];
       const [dir, flip] = ALL_ORI[tryOri];
       const cells = orient(tile, anchor.x, anchor.y, dir, flip);
-      // Don't intersect other pending placements or already-placed cells
-      const otherPending = this.pending.filter((_, j) => j !== lastIdx);
-      const occupied = new Set<string>([
-        ...otherPending.flatMap((p) => p.cells.map((c) => key(c.x, c.y))),
-        ...this.game.board.cells.keys(),
-      ]);
-      if (cells.some((c) => occupied.has(key(c.x, c.y)))) continue;
-      if (cells.some((c) => this.game.board.enclosed.has(key(c.x, c.y)))) continue;
-      const candidate: PlacedTile = { tileId: tile.id, cells };
-      // Engine-level validation in the context of the full pending set
-      const allTiles = [...otherPending, candidate].map((p) => ({ tileId: p.tileId, cells: p.cells }));
-      if (validateMove(this.game.board, allTiles).ok) {
-        this.pending[lastIdx] = candidate;
-        this.pendingOri[lastIdx] = tryOri;
-        sfx.rotate();
-        this.syncScene();
-        this.updateButtons();
-        return;
-      }
+      // Only refuse if the rotated tile would PHYSICALLY overlap something.
+      // Rules-level validation (adjacency, colour links) happens at Confirm.
+      if (this.overlapsOccupied(cells, lastIdx)) continue;
+      this.pending[lastIdx] = { tileId: tile.id, cells };
+      this.pendingOri[lastIdx] = tryOri;
+      sfx.rotate();
+      this.syncScene();
+      this.updateButtons();
+      return;
     }
-    sfx.invalid(); // no legal rotation at this anchor
+    sfx.invalid(); // no rotation fits at this anchor
   }
 
   private undo(): void {
@@ -326,7 +331,10 @@ export class GameUI {
     const actor = { name: "You", animal: this.game.currentPlayer.animal, colour: this.game.currentPlayer.colour };
     const res = this.game.commit(move);
     if (!res.ok) {
-      this.setStatus(`Illegal: ${res.reason}`);
+      // Validation happens here, not while dragging. Tell the player exactly
+      // what's wrong, bray, and leave the pending tiles in place to adjust.
+      sfx.invalid();
+      this.setStatus(`Can't confirm — ${res.reason}. Adjust your hedges and try again.`);
       return;
     }
     this.afterCommit(res, actor);
@@ -340,64 +348,13 @@ export class GameUI {
     this.beginTurn();
   }
 
-  // Build the cell -> placement map so tapping/dragging onto a cell knows
-  // which placement to apply. Highlights (visible dots) are intentionally
-  // NOT shown — the player discovers valid moves themselves; the ghost
-  // preview during a drag/tap confirms validity in the moment.
+  /** Free placement means there are no pre-computed candidate dots to show.
+   *  Kept as a stub so existing call-sites don't have to be touched. */
   private refreshHighlights(): void {
-    this.placementByCell.clear();
     this.scene.setHighlights(new Map());
-    if (this.selectedId == null) return;
-    const tile = this.handTile(this.selectedId)!;
-    const cands = this.anchorsFor(tile, ALL_ORI[this.oriIndex]);
-    // Anchor-only: finger position IS the anchor. No magnetic snap from any
-    // covered cell to a candidate elsewhere — the player chooses the exact spot.
-    for (const [anchorKey, cand] of cands) this.placementByCell.set(anchorKey, cand);
   }
 
   /** Legal anchor cells (segment-0 position) for placing `tile` in this orientation now. */
-  private anchorsFor(tile: Tile, ori: OriSpec): Map<string, PlacedTile> {
-    const [dir, flip] = ori;
-    const out = new Map<string, PlacedTile>();
-    const working = this.workingCells();
-    const blocked = new Set([...working.keys(), ...this.game.board.enclosed]);
-
-    let anchors: Set<string>;
-    if (working.size === 0) {
-      anchors = new Set(["0,0"]);
-    } else {
-      anchors = new Set();
-      for (const k of working.keys()) {
-        const [x, y] = k.split(",").map(Number);
-        for (const [dx, dy] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ]) {
-          const nk = key(x + dx, y + dy);
-          if (!blocked.has(nk)) anchors.add(nk);
-        }
-      }
-    }
-    const [ux, uy] = dir === "H" ? [1, 0] : [0, 1];
-    for (const a of anchors) {
-      const [ax, ay] = a.split(",").map(Number);
-      // try anchor so that any of the 3 segments lands on the frontier cell
-      for (let i = 0; i < 3; i++) {
-        const ox = ax - ux * i;
-        const oy = ay - uy * i;
-        const cells = orient(tile, ox, oy, dir, flip);
-        if (!cells.every((c) => !blocked.has(key(c.x, c.y)))) continue;
-        const cand: PlacedTile = { tileId: tile.id, cells };
-        if (validateMove(this.game.board, [...this.pending, cand]).ok) {
-          out.set(key(ox, oy), cand);
-        }
-      }
-    }
-    return out;
-  }
-
   // ---- rendering ----
   private workingCells(): Map<string, Cell> {
     const m = new Map(this.game.board.cells);
@@ -608,7 +565,6 @@ export class GameUI {
     this.usedIds.clear();
     this.selectedId = null;
     this.oriIndex = 0;
-    this.placementByCell.clear();
     this.scene.setHighlights(new Map());
     this.scene.setGhost(null, false);
   }
