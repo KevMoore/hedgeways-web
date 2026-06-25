@@ -87,6 +87,69 @@ body {
     font-size: 13px;
   }
 }
+/* small phones (iPhone SE etc.): drop decorative furniture and compact the
+   selector hard so the whole menu — Start button included — fits without scroll */
+@media (max-height: 720px) {
+  .start {
+    padding-top: 10px;
+    gap: 7px;
+  }
+  .logo {
+    font-size: clamp(23px, 6vw, 34px);
+  }
+  .tag,
+  .hedge-row {
+    display: none; /* purely decorative — first to go when space is tight */
+  }
+  .setup {
+    padding: 10px;
+    gap: 8px;
+  }
+  .identity {
+    gap: 7px;
+  }
+  .pick {
+    gap: 4px;
+  }
+  .pick-label {
+    font-size: 12px;
+  }
+  .card {
+    padding: 4px 3px 3px;
+    border-radius: 11px;
+  }
+  .card-pic {
+    height: 38px;
+    font-size: 24px;
+  }
+  .farmers .card-pic {
+    height: 42px;
+  }
+  .card-name {
+    font-size: 10px;
+  }
+  .count button {
+    width: 36px;
+    height: 36px;
+  }
+  .preview {
+    padding: 6px 8px;
+    gap: 8px;
+  }
+  .preview .pv-farmer {
+    width: 44px;
+    height: 44px;
+  }
+  .pv-name {
+    font-size: 14px;
+  }
+  .pv-perk {
+    font-size: 11px;
+  }
+  .slot select {
+    padding: 6px;
+  }
+}
 .logo,
 .brand {
   font-weight: 800;

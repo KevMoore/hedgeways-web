@@ -9,6 +9,7 @@ dist
 
 # test artifacts
 test-results
+test-screens
 playwright-report
 blob-report
 .playwright

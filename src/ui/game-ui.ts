@@ -70,6 +70,9 @@ export class GameUI {
    *  finger — the tile keeps its position on pickup instead of snapping its
    *  anchor to the grab cell. Zero for fresh hand placement (anchor = finger). */
   private grabOffset = { dx: 0, dy: 0 };
+  /** Which side a vertical tile's touch lift sits on — fixed at drag start to
+   *  the side the tile was lifted from, so the ghost doesn't flip mid-drag. */
+  private liftSide: "L" | "R" = "L";
   /** Per-player snapshot of hand tile ids on the last renderHand — used to
    *  detect which tiles are NEW so they can fly in from the bag. */
   private lastHandIds = new Map<number, Set<number>>();
@@ -474,7 +477,7 @@ export class GameUI {
       this.scene.setFingerMarker(null);
       return;
     }
-    const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.currentOri());
+    const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.currentOri(), this.liftSide);
     // The finger dot only makes sense when the ghost is lifted away from the
     // finger (touch hand-placement). On a flush drag the ghost sits at the
     // finger, so the dot would just sit under it — skip it.
@@ -492,7 +495,7 @@ export class GameUI {
     // reads `touchGhostOffset` to know whether to apply the lift. If we clear
     // first the tile drops at the finger cell, not the ghost cell.
     const overBoard = this.scene.pointOverBoard(clientX, clientY);
-    const lifted = overBoard ? this.scene.liftedCellAt(clientX, clientY, this.currentOri()) : null;
+    const lifted = overBoard ? this.scene.liftedCellAt(clientX, clientY, this.currentOri(), this.liftSide) : null;
     this.scene.setTouchGhostOffset(false); // touch drag ending — back to flush
     this.scene.setFingerMarker(null);
     // Released anywhere off the board canvas — un-play. Tile returns to hand
@@ -846,7 +849,10 @@ export class GameUI {
         dragging = true;
         this.dragging = true; // suppress mid-drag ghost validity flicker
         this.grabOffset = { dx: 0, dy: 0 }; // from-hand: anchor sits at the finger
-        // Touch drag → lift the ghost above the finger so it isn't occluded.
+        // Touch drag → lift the ghost off the finger so it isn't occluded.
+        // Seed the lift toward the side the tile was lifted from (where the
+        // gesture started), so the ghost stays on that side instead of flipping.
+        this.liftSide = this.scene.sideOfClientX(startX);
         this.scene.setTouchGhostOffset(e.pointerType === "touch");
         // commit to the drag: select this tile so the ghost-preview path is live.
         // Orientation is whatever the player last chose — never auto-flipped.
@@ -885,7 +891,7 @@ export class GameUI {
       // shift up. Clearing first would make it return the bare finger cell
       // and the tile would drop where the finger is, not where the ghost is.
       if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
-        const { target } = this.scene.liftedCellAt(e.clientX, e.clientY, this.currentOri());
+        const { target } = this.scene.liftedCellAt(e.clientX, e.clientY, this.currentOri(), this.liftSide);
         this.scene.setTouchGhostOffset(false);
         this.scene.setFingerMarker(null);
         this.onTapCell(target[0], target[1]); // places, or flashInvalid + donkey
