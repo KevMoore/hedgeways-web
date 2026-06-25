@@ -1,5 +1,5 @@
 import { chooseAiMove } from "../game/ai";
-import { isPalindrome, orient } from "../game/board";
+import { orient } from "../game/board";
 import { COLOUR_HEX, COLOUR_HEX_DARK, COLOUR_NAME, MAX_LAY } from "../game/constants";
 import { Game, type GameConfig, type GameSnapshot, type TurnResult, totalScore } from "../game/game";
 import { generateMoves } from "../game/moves";
@@ -48,6 +48,9 @@ export class GameUI {
   private alive = true;
   /** low-bag tiers already announced, so each callout fires at most once */
   private bagWarned = new Set<number>();
+  /** when a board pending is picked up via drag, remember where it came from
+   *  so we can restore on cancel / invalid drop */
+  private pickedOrigin: { placement: PlacedTile; oriIdx: number } | null = null;
 
   private onQuit: (() => void) | null;
   private onRestart: ((config: GameConfig) => void) | null;
@@ -68,6 +71,11 @@ export class GameUI {
     this.scene.tapHandler = (x, y) => this.onTapCell(x, y);
     this.scene.hoverHandler = (x, y) => this.onHover(x, y);
     this.scene.leaveHandler = () => this.scene.setGhost(null, false);
+    // Drag a placed pending tile around the board to reposition it (or off
+    // the board entirely, back to the hand).
+    this.scene.dragStart = (x, y) => this.tryPickPending(x, y);
+    this.scene.dragMove = (x, y, cx, cy) => this.onPickedMove(x, y, cx, cy);
+    this.scene.dragEnd = (x, y, cx, cy) => this.onPickedRelease(x, y, cx, cy);
 
     root.querySelector("#btn-rotate")!.addEventListener("click", () => this.rotate());
     root.querySelector("#btn-undo")!.addEventListener("click", () => this.undo());
@@ -234,6 +242,94 @@ export class GameUI {
     );
   }
 
+  /** Pointerdown on a board cell — if it's part of a pending tile, pick it
+   *  up (remove from pending, set as selected, remember origin). Returns
+   *  true to claim the gesture; false to let the scene pan as normal. */
+  private tryPickPending(x: number, y: number): boolean {
+    if (this.busy || this.game.currentPlayer.isBot) return false;
+    if (this.pickedOrigin !== null) return false;
+    const idx = this.pending.findIndex((p) => p.cells.some((c) => c.x === x && c.y === y));
+    if (idx < 0) return false;
+    const placement = this.pending.splice(idx, 1)[0];
+    const oriIdx = this.pendingOri.splice(idx, 1)[0];
+    this.usedIds.delete(placement.tileId);
+    this.selectedId = placement.tileId;
+    this.oriIndex = oriIdx;
+    this.pickedOrigin = { placement, oriIdx };
+    this.clearDanger();
+    sfx.pickup();
+    this.syncScene();
+    this.renderHand(false);
+    this.updateButtons();
+    this.onHover(x, y);
+    return true;
+  }
+
+  private onPickedMove(x: number, y: number, clientX: number, clientY: number): void {
+    if (this.overHand(clientX, clientY)) {
+      // Hovering over the hand strip — clear the board ghost; we'll restore
+      // to hand on release without placing on the board.
+      this.scene.setGhost(null, false);
+      return;
+    }
+    this.onHover(x, y);
+  }
+
+  private onPickedRelease(x: number, y: number, clientX: number, clientY: number): void {
+    if (this.selectedId == null) return;
+    const tile = this.handTile(this.selectedId);
+    if (!tile) return;
+    // If released over the hand strip — un-play: tile stays in hand, picked
+    // origin discarded.
+    if (this.overHand(clientX, clientY)) {
+      this.pickedOrigin = null;
+      this.selectedId = null;
+      this.scene.setGhost(null, false);
+      this.syncScene();
+      this.renderHand(false);
+      this.updateButtons();
+      return;
+    }
+    const [dir, flip] = ALL_ORI[this.oriIndex];
+    const cells = orient(tile, x, y, dir, flip);
+    if (this.overlapsOccupied(cells)) {
+      // Bray + restore to original position.
+      const orig = this.pickedOrigin;
+      this.pickedOrigin = null;
+      if (orig) {
+        this.pending.push(orig.placement);
+        this.pendingOri.push(orig.oriIdx);
+        this.usedIds.add(orig.placement.tileId);
+      }
+      this.selectedId = null;
+      sfx.invalid();
+      this.scene.setGhost(null, false);
+      this.syncScene();
+      this.renderHand(false);
+      this.updateButtons();
+      return;
+    }
+    // Land at the new spot.
+    this.pickedOrigin = null;
+    this.pending.push({ tileId: tile.id, cells });
+    this.pendingOri.push(this.oriIndex);
+    this.usedIds.add(tile.id);
+    this.selectedId = null;
+    sfx.place();
+    this.scene.setGhost(null, false);
+    this.syncScene();
+    this.renderHand(false);
+    this.updateButtons();
+  }
+
+  /** True if the (clientX, clientY) point is over the hand strip element. */
+  private overHand(clientX: number, clientY: number): boolean {
+    const el = this.root.querySelector(".hand") as HTMLElement | null;
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
+  }
+
   private onHover(x: number, y: number): void {
     if (this.busy || this.game.currentPlayer.isBot || this.selectedId == null) return;
     const tile = this.handTile(this.selectedId);
@@ -269,24 +365,23 @@ export class GameUI {
   }
 
   private rotate(): void {
-    // 1) An in-hand tile is selected → rotate its preview orientation.
+    this.clearDanger();
+    // 1) An in-hand tile is selected → rotate its preview orientation by 90°.
     if (this.selectedId != null) {
-      const tile = this.handTile(this.selectedId)!;
-      const allowed = isPalindrome(tile) ? [0, 1] : [0, 1, 2, 3];
-      const pos = allowed.indexOf(this.oriIndex);
-      this.oriIndex = allowed[(pos + 1) % allowed.length];
+      this.oriIndex = (this.oriIndex + 1) % 4;
       sfx.rotate();
       this.refreshHighlights();
       return;
     }
     // 2) No selection but a tile is already pending → rotate the last placed
-    //    tile in place around its anchor, keeping every placement legal.
+    //    tile in place around its anchor by 90°.
     if (this.pending.length > 0) this.rotateLastPending();
   }
 
-  /** Rotate the most recent pending placement around its anchor. Tries each
-   *  remaining orientation in cycle; the first one that yields a legal
-   *  combined move wins. If none work, no change + an "invalid" bray. */
+  /** Rotate the most recent pending placement 90° around its anchor. Tries
+   *  the next orientation; if it would overlap, advances to the one after,
+   *  etc. (so the player still feels a single quarter-turn even when the
+   *  natural next orientation has no room). */
   private rotateLastPending(): void {
     const lastIdx = this.pending.length - 1;
     const last = this.pending[lastIdx];
@@ -294,14 +389,10 @@ export class GameUI {
     const tile = this.game.currentPlayer.hand.find((t) => t.id === last.tileId);
     if (!tile) return;
     const anchor = last.cells[0];
-    const allowed = isPalindrome(tile) ? [0, 1] : [0, 1, 2, 3];
-    const startPos = allowed.indexOf(lastOri);
-    for (let i = 1; i <= allowed.length; i++) {
-      const tryOri = allowed[(startPos + i) % allowed.length];
+    for (let step = 1; step <= 4; step++) {
+      const tryOri = (lastOri + step) % 4;
       const [dir, flip] = ALL_ORI[tryOri];
       const cells = orient(tile, anchor.x, anchor.y, dir, flip);
-      // Only refuse if the rotated tile would PHYSICALLY overlap something.
-      // Rules-level validation (adjacency, colour links) happens at Confirm.
       if (this.overlapsOccupied(cells, lastIdx)) continue;
       this.pending[lastIdx] = { tileId: tile.id, cells };
       this.pendingOri[lastIdx] = tryOri;
@@ -319,6 +410,7 @@ export class GameUI {
     if (!last) return;
     this.usedIds.delete(last.tileId);
     this.selectedId = null;
+    this.clearDanger();
     this.syncScene();
     this.renderHand(false);
     this.refreshHighlights();
@@ -332,14 +424,29 @@ export class GameUI {
     const res = this.game.commit(move);
     if (!res.ok) {
       // Validation happens here, not while dragging. Tell the player exactly
-      // what's wrong, bray, and leave the pending tiles in place to adjust.
+      // what's wrong, bray, flash the offending hedges, and leave them in
+      // place to adjust.
       sfx.invalid();
       this.setStatus(`Can't confirm — ${res.reason}. Adjust your hedges and try again.`);
+      this.markDanger();
       return;
     }
+    this.clearDanger();
     this.afterCommit(res, actor);
     this.syncScene();
     this.beginTurn();
+  }
+
+  /** Mark every pending cell as "in danger" — they pulse red until the
+   *  player adjusts (move / rotate / undo / pickup). */
+  private markDanger(): void {
+    const keys: string[] = [];
+    for (const p of this.pending) for (const c of p.cells) keys.push(key(c.x, c.y));
+    this.scene.setDangerCells(keys);
+  }
+
+  private clearDanger(): void {
+    this.scene.setDangerCells([]);
   }
 
   passTurn(): void {

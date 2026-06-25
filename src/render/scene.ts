@@ -45,6 +45,8 @@ export class Scene {
   private dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
   private cells = new Map<string, Cell>();
   private enclosed = new Set<string>();
+  /** cell keys to pulse red — set when the engine rejects a Confirm. */
+  private dangerCells = new Set<string>();
   private ghost: Ghost | null = null;
   private highlights = new Map<string, Colour>(); // cell -> colour of the hedge segment that could sit there
   private flash = new Map<string, number>(); // cell -> start time
@@ -66,6 +68,14 @@ export class Scene {
   tapHandler: ((x: number, y: number) => void) | null = null;
   hoverHandler: ((x: number, y: number) => void) | null = null;
   leaveHandler: (() => void) | null = null;
+  /** Pointer-down hook: return true to take over the gesture (e.g. picking up
+   *  a pending tile to drag around the board). When this fires and returns
+   *  true, the scene routes pointermove/pointerup to dragMove/dragEnd instead
+   *  of panning. clientX/clientY are passed through so handlers can detect
+   *  drop targets outside the canvas (e.g. the hand strip below the board). */
+  dragStart: ((cellX: number, cellY: number, clientX: number, clientY: number) => boolean) | null = null;
+  dragMove: ((cellX: number, cellY: number, clientX: number, clientY: number) => void) | null = null;
+  dragEnd: ((cellX: number, cellY: number, clientX: number, clientY: number) => void) | null = null;
   private hoverCell = "";
   private rafId = 0;
   private alive = true;
@@ -87,7 +97,12 @@ export class Scene {
       const moving = this.stepCamera();
       const now = performance.now();
       const transient =
-        this.needsDraw || this.flash.size || this.acrePops.length || this.bursts.length || this.animating();
+        this.needsDraw ||
+        this.flash.size ||
+        this.acrePops.length ||
+        this.bursts.length ||
+        this.dangerCells.size > 0 ||
+        this.animating();
       const idleAnimals = !this.reduceMotion && this.acres.size > 0;
       // Real-time animation (camera ease, acre pops, bursts) draws every frame.
       // Ambient livestock only needs ~30fps, so throttle that path to halve render
@@ -129,6 +144,9 @@ export class Scene {
     this.tapHandler = null;
     this.hoverHandler = null;
     this.leaveHandler = null;
+    this.dragStart = null;
+    this.dragMove = null;
+    this.dragEnd = null;
   }
 
   private animating(): boolean {
@@ -371,6 +389,18 @@ export class Scene {
     this.needsDraw = true;
   }
 
+  /** Mark these cell keys as "in danger" — they pulse red until cleared. */
+  setDangerCells(keys: Iterable<string>): void {
+    this.dangerCells = new Set(keys);
+    this.needsDraw = true;
+  }
+
+  /** Whether anything is currently flashing — used to keep the render loop
+   *  ticking at the pulse rate even when the camera is still. */
+  hasDanger(): boolean {
+    return this.dangerCells.size > 0;
+  }
+
   flashEnclosed(cells: Iterable<string>, animal = "", colour = "#ffd34d"): void {
     const now = performance.now();
     let sx = 0;
@@ -455,11 +485,24 @@ export class Scene {
     let startY = 0;
     const pointers = new Map<number, { x: number; y: number }>();
     let pinchDist = 0;
+    /** Single-finger drag claimed by game-ui (e.g. picking up a pending tile).
+     *  When set, pointermove/up route to dragMove/dragEnd instead of panning. */
+    let claimedPointer = -1;
 
     const c = this.canvas;
     c.style.touchAction = "none";
 
     c.addEventListener("pointerdown", (e) => {
+      // First-finger only: let game-ui claim the gesture (pick up a pending).
+      if (pointers.size === 0 && this.dragStart) {
+        const rect = c.getBoundingClientRect();
+        const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
+        if (this.dragStart(cx, cy, e.clientX, e.clientY)) {
+          c.setPointerCapture(e.pointerId);
+          claimedPointer = e.pointerId;
+          return;
+        }
+      }
       c.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       down = true;
@@ -472,6 +515,14 @@ export class Scene {
       }
     });
     c.addEventListener("pointermove", (e) => {
+      if (claimedPointer === e.pointerId) {
+        if (this.dragMove) {
+          const rect = c.getBoundingClientRect();
+          const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
+          this.dragMove(cx, cy, e.clientX, e.clientY);
+        }
+        return;
+      }
       if (!down) {
         // hover preview (desktop / pen — touch never fires move without a button)
         if (this.hoverHandler && e.pointerType !== "touch") {
@@ -517,6 +568,15 @@ export class Scene {
       this.needsDraw = true;
     });
     const up = (e: PointerEvent) => {
+      if (claimedPointer === e.pointerId) {
+        claimedPointer = -1;
+        if (this.dragEnd) {
+          const rect = c.getBoundingClientRect();
+          const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
+          this.dragEnd(cx, cy, e.clientX, e.clientY);
+        }
+        return;
+      }
       pointers.delete(e.pointerId);
       if (!down) return;
       down = pointers.size > 0;
@@ -527,7 +587,18 @@ export class Scene {
       }
     };
     c.addEventListener("pointerup", up);
-    c.addEventListener("pointercancel", (e) => pointers.delete(e.pointerId));
+    c.addEventListener("pointercancel", (e) => {
+      if (claimedPointer === e.pointerId) {
+        claimedPointer = -1;
+        if (this.dragEnd) {
+          const rect = c.getBoundingClientRect();
+          const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
+          this.dragEnd(cx, cy, e.clientX, e.clientY);
+        }
+        return;
+      }
+      pointers.delete(e.pointerId);
+    });
     c.addEventListener("pointerleave", () => {
       this.hoverCell = "";
       if (this.leaveHandler) this.leaveHandler();
@@ -601,7 +672,10 @@ export class Scene {
         (this.cells.has(key(x + 1, y)) ? 2 : 0) |
         (this.cells.has(key(x, y + 1)) ? 4 : 0) |
         (this.cells.has(key(x - 1, y)) ? 8 : 0);
-      this.drawHedge(x, y, cell.colour, 1, false, pop, mask);
+      // Pulse a danger-marked cell red (engine rejected this placement at
+      // Confirm). The pulse alternates ~2Hz so it's noticeable but not jarring.
+      const danger = this.dangerCells.has(k) && Math.floor(now / 280) % 2 === 0;
+      this.drawHedge(x, y, cell.colour, 1, danger, pop, mask);
     }
 
     // free-range livestock roaming inside the fields (only if the sheet loaded)
@@ -857,8 +931,11 @@ export class Scene {
       ctx.translate(-cx, -cy);
     }
 
-    // solid colour panel (or white in danger preview)
-    ctx.fillStyle = danger ? "#ffffff" : COLOUR_HEX[colour];
+    // Solid colour panel. In danger mode at low alpha (ghost preview) we
+    // wash it white so the red hedge reads as "this won't sit there"; for
+    // fully-opaque danger flashes on placed tiles we keep the colour so the
+    // player can still identify their tile.
+    ctx.fillStyle = danger && alpha < 1 ? "#ffffff" : COLOUR_HEX[colour];
     ctx.fillRect(px, py, s, s);
 
     const nH = (hedgeMask & 1) !== 0;
