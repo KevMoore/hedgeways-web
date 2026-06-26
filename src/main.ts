@@ -3,9 +3,11 @@ import gsap from "gsap";
 import { GameUI } from "./ui/game-ui";
 import { showHowTo } from "./ui/howto";
 import type { Difficulty } from "./game/types";
-import type { GameConfig, GameSnapshot } from "./game/game";
+import type { GameConfig, GameSnapshot, TurnResult } from "./game/game";
 import { describeSave, loadActive } from "./game/persistence";
 import { FARMERS, LIVESTOCK, PLAYER_KITS } from "./game/constants";
+import { NetClient, clearSession, loadSession, saveSession, type NetHandlers, type OnlineSession } from "./net/client";
+import type { OnlineKit } from "./net/protocol";
 import { mountHomeCritters } from "./ui/home-critters";
 import { mountFarmerPortrait } from "./ui/farmer-portrait";
 import { getFarmerSprites } from "./render/farmer-sprites";
@@ -14,6 +16,15 @@ import { sfx } from "./audio";
 const app = document.getElementById("app")!;
 let ui: GameUI | null = null;
 let stopHome: (() => void) | null = null;
+let net: NetClient | null = null;
+/** false until the first authoritative state arrives and the online board mounts */
+let onlineStarted = false;
+
+function teardownNet(): void {
+  net?.close();
+  net = null;
+  onlineStarted = false;
+}
 
 /** Dispose any running game (stop its render loop + bot timers) before swapping the screen. */
 function teardown(): void {
@@ -41,6 +52,235 @@ function startGame(config: GameConfig, restore?: GameSnapshot): GameUI {
     newGame: (c: GameConfig) => (ui = new GameUI(app, c, opts)),
   };
   return ui;
+}
+
+// ---- online (human-vs-human) ----
+
+/** A dismissable centered overlay for online lobby/connection UI. Tagged
+ *  `net-overlay` so clearOverlays() never touches the game's own modals
+ *  (end screen, how-to, bag peek). */
+function overlay(html: string): HTMLElement {
+  const back = document.createElement("div");
+  back.className = "modal-back net-overlay";
+  back.innerHTML = `<div class="modal">${html}</div>`;
+  app.appendChild(back);
+  return back;
+}
+function clearOverlays(): void {
+  app.querySelectorAll(".net-overlay").forEach((m) => m.remove());
+}
+
+/** Reconnection backoff state (transient network drops mid-game). */
+let reconnectTries = 0;
+let reconnecting = false;
+const RECONNECT_DELAYS = [600, 1500, 3000, 5000];
+
+function showConnLost(): void {
+  clearOverlays();
+  const back = overlay(`<h2>Connection lost</h2><p>Couldn't reach the game server — your game may have ended.</p><div class="end-btns"><button class="btn primary" id="ov-menu">Back to menu</button></div>`);
+  back.querySelector("#ov-menu")!.addEventListener("click", () => {
+    teardownNet();
+    clearSession();
+    renderStart();
+  });
+}
+
+/** Try to silently rejoin an in-progress game after a transient drop, backing off
+ *  over a few attempts before surfacing "connection lost". */
+function scheduleReconnect(): void {
+  const sess = loadSession();
+  if (!sess || reconnectTries >= RECONNECT_DELAYS.length) {
+    reconnecting = false;
+    return showConnLost();
+  }
+  reconnecting = true;
+  const delay = RECONNECT_DELAYS[reconnectTries++];
+  clearOverlays();
+  overlay(`<h2>Reconnecting…</h2><p>Lost contact — rejoining your game (attempt ${reconnectTries})…</p>`);
+  window.setTimeout(() => {
+    net = new NetClient(makeNetHandlers());
+    net.connect(() => net?.reconnect(sess.code, sess.token));
+  }, delay);
+}
+
+/** Build the player's online identity from their chosen farmer + livestock. */
+function buildKit(farmerIdx: number, livestockIdx: number): OnlineKit {
+  const f = FARMERS[farmerIdx];
+  const l = LIVESTOCK[livestockIdx];
+  return { name: f.name, colour: f.colour, animal: l.animal, farmerId: f.id, farmerName: f.name };
+}
+
+/** Mount the live board on the first authoritative snapshot; thereafter feed
+ *  every snapshot straight into the running GameUI. */
+function makeNetHandlers(): NetHandlers {
+  return {
+    onSeated(code: string, seat: number, token: string) {
+      saveSession({ code, token, seat });
+      if (seat === 0) showWaiting(code); // creator: show the code to share
+    },
+    onLobby(_seats, needed: number) {
+      const w = app.querySelector(".wait-needed");
+      if (w) w.textContent = needed > 0 ? "Waiting for an opponent…" : "Opponent found — starting!";
+    },
+    onState(snap: GameSnapshot, last: TurnResult | undefined, mySeat: number, turnDeadline: number) {
+      // any authoritative state means we're connected and in sync again
+      reconnecting = false;
+      reconnectTries = 0;
+      clearOverlays();
+      if (!onlineStarted) {
+        onlineStarted = true;
+        startOnlineGame(snap, mySeat, turnDeadline);
+      } else {
+        ui?.applyServerState(snap, last, mySeat, turnDeadline);
+      }
+    },
+    onOpponentLeft(graceMs: number) {
+      ui?.showOpponentLeft(graceMs);
+    },
+    onOpponentBack() {
+      ui?.showOpponentBack();
+    },
+    onOpponentForfeit() {
+      clearSession(); // the room is gone server-side; don't try to rejoin it
+      ui?.showForfeitWin();
+    },
+    onClosed(reason: string) {
+      clearSession();
+      teardownNet();
+      const back = overlay(`<h2>Game over</h2><p>${reason}</p><div class="end-btns"><button class="btn primary" id="ov-menu">Back to menu</button></div>`);
+      back.querySelector("#ov-menu")!.addEventListener("click", () => renderStart());
+    },
+    onError(reason: string) {
+      if (reconnecting) {
+        // a reconnect attempt hit a hard error (room ended) — stop retrying
+        reconnecting = false;
+        teardownNet();
+        clearSession();
+        return showConnLost();
+      }
+      if (onlineStarted && ui) {
+        ui.showActionError(reason); // in-game rejection (e.g. not your turn) — non-fatal
+        return;
+      }
+      // lobby / connection error
+      clearSession();
+      const e = app.querySelector(".ov-error");
+      if (e) e.textContent = reason;
+      else {
+        const back = overlay(`<h2>Couldn't connect</h2><p>${reason}</p><div class="end-btns"><button class="btn primary" id="ov-menu">Back to menu</button></div>`);
+        back.querySelector("#ov-menu")!.addEventListener("click", () => {
+          teardownNet();
+          renderStart();
+        });
+      }
+    },
+    onDisconnect() {
+      if (onlineStarted) scheduleReconnect();
+      else {
+        const e = app.querySelector(".ov-error");
+        if (e) e.textContent = "Lost connection to the server.";
+      }
+    },
+  };
+}
+
+function showWaiting(code: string): void {
+  clearOverlays();
+  const back = overlay(`
+    <h2>Game ready</h2>
+    <p>Share this code with your opponent:</p>
+    <div class="room-code">${code}</div>
+    <p class="wait-needed">Waiting for an opponent…</p>
+    <div class="end-btns"><button class="btn" id="ov-cancel">Cancel</button></div>`);
+  back.querySelector("#ov-cancel")!.addEventListener("click", () => {
+    clearSession();
+    teardownNet();
+    renderStart();
+  });
+}
+
+function connectCreate(kit: OnlineKit): void {
+  teardownNet();
+  reconnectTries = 0;
+  reconnecting = false;
+  net = new NetClient(makeNetHandlers());
+  clearOverlays();
+  overlay(`<h2>Connecting…</h2><p class="ov-error">Reaching the game server…</p>`);
+  net.connect(() => net?.create(kit));
+}
+
+function connectJoin(code: string, kit: OnlineKit): void {
+  teardownNet();
+  reconnectTries = 0;
+  reconnecting = false;
+  net = new NetClient(makeNetHandlers());
+  clearOverlays();
+  overlay(`<h2>Joining ${code}…</h2><p class="ov-error">Reaching the game server…</p>`);
+  net.connect(() => net?.join(code, kit));
+}
+
+/** Try to rejoin an in-progress game after a refresh/disconnect. */
+function tryReconnect(sess: OnlineSession): void {
+  teardownNet();
+  reconnecting = true; // a hard error here means the game is gone → back to menu
+  net = new NetClient(makeNetHandlers());
+  net.connect(() => net?.reconnect(sess.code, sess.token));
+}
+
+/** The "Play online" menu: create a room or join one by code. */
+function openOnlineMenu(kit: OnlineKit): void {
+  const back = overlay(`
+    <h2>Play online</h2>
+    <p>Head-to-head against a friend.</p>
+    <div class="online-opts">
+      <button class="btn primary" id="ov-create">Create a game</button>
+      <div class="join-row">
+        <input id="ov-code" maxlength="6" placeholder="CODE" autocomplete="off" spellcheck="false" />
+        <button class="btn" id="ov-join">Join</button>
+      </div>
+      <p class="ov-error"></p>
+    </div>
+    <div class="end-btns"><button class="btn" id="ov-back">Back</button></div>`);
+  back.querySelector("#ov-create")!.addEventListener("click", () => connectCreate(kit));
+  const input = back.querySelector<HTMLInputElement>("#ov-code")!;
+  input.addEventListener("input", () => (input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, "")));
+  const join = () => {
+    const code = input.value.trim().toUpperCase();
+    if (code.length < 6) {
+      back.querySelector(".ov-error")!.textContent = "Enter the 6-character code.";
+      return;
+    }
+    connectJoin(code, kit);
+  };
+  back.querySelector("#ov-join")!.addEventListener("click", join);
+  input.addEventListener("keydown", (e) => e.key === "Enter" && join());
+  back.querySelector("#ov-back")!.addEventListener("click", () => back.remove());
+}
+
+function startOnlineGame(snap: GameSnapshot, mySeat: number, turnDeadline: number): void {
+  teardown();
+  clearOverlays();
+  ui = new GameUI(app, { players: snap.config.players }, {
+    restore: snap,
+    onQuit: () => {
+      net?.leave(); // tell the server (and opponent) we're going — not a silent drop
+      teardownNet();
+      clearSession();
+      renderStart();
+    },
+    online: {
+      mySeat,
+      sendMove: (m) => net?.move(m),
+      requestRematch: () => net?.rematch(),
+      turnDeadline,
+    },
+  });
+  sfx.startMusic();
+  (window as any).__hedge = {
+    ui,
+    state: () => ui!.state(),
+    autoPlayTurn: () => ui!.autoPlayTurn(),
+  };
 }
 
 const DIFFS: Difficulty[] = ["easy", "medium", "hard", "expert"];
@@ -104,6 +344,7 @@ function renderStart(): void {
       </div>
       <div class="start-btns">
         <button class="btn" id="how">How to play</button>
+        <button class="btn" id="online">Play online</button>
         <button class="btn primary" id="play">Start game</button>
       </div>
     </div>`;
@@ -229,6 +470,7 @@ function renderStart(): void {
   }
 
   app.querySelector("#how")!.addEventListener("click", () => showHowTo());
+  app.querySelector("#online")!.addEventListener("click", () => openOnlineMenu(buildKit(farmerIdx, livestockIdx)));
   app.querySelector("#play")!.addEventListener("click", () => {
     // The first human gets their chosen farmer + livestock; every other seat draws
     // a distinct farmer (unique colour/portrait) and a distinct livestock so the
@@ -278,4 +520,19 @@ window.addEventListener("pointerdown", () => sfx.unlock(), { once: true });
 // expose a pre-game hook for e2e
 (window as any).__hedge = { newGame: (c: GameConfig) => startGame(c) };
 
-renderStart();
+// If we have a saved online session (e.g. the tab was refreshed mid-game), try to
+// rejoin it before falling back to the menu.
+const sess = loadSession();
+if (sess) {
+  overlay(`<h2>Reconnecting…</h2><p>Rejoining your game.</p>`);
+  tryReconnect(sess);
+  window.setTimeout(() => {
+    if (!onlineStarted) {
+      teardownNet();
+      clearSession();
+      renderStart();
+    }
+  }, 4000);
+} else {
+  renderStart();
+}

@@ -157,6 +157,12 @@ export class Game {
     this.recomputeHerdBonus(); // derive herd bonus from the surviving ownership
   }
 
+  /** Replace all state from a snapshot (online: apply an authoritative — possibly
+   *  redacted — server snapshot). Public wrapper over the internal loader. */
+  applySnapshot(s: GameSnapshot): void {
+    this.load(s);
+  }
+
   /** Deep, serializable snapshot of the whole game (for save/resume) — never aliases live state. */
   toSnapshot(): GameSnapshot {
     const tile = (t: Tile): Tile => ({ id: t.id, segments: [...t.segments] });

@@ -1354,3 +1354,79 @@ body {
     backdrop-filter: none;
   }
 }
+
+/* ---- online multiplayer lobby ---- */
+.room-code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-align: center;
+  color: var(--frame);
+  background: #f3fbe9;
+  border: 2px dashed var(--frame);
+  border-radius: 12px;
+  padding: 14px 8px;
+  margin: 10px 0;
+  user-select: all;
+}
+.wait-needed {
+  text-align: center;
+  color: #4a5a4a;
+}
+.online-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+.online-opts .join-row {
+  display: flex;
+  gap: 8px;
+}
+.online-opts #ov-code {
+  flex: 1;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-align: center;
+  text-transform: uppercase;
+  border: 2px solid var(--frame);
+  border-radius: 10px;
+  padding: 8px;
+  min-width: 0;
+}
+.ov-error {
+  color: #c0392b;
+  min-height: 1.2em;
+  text-align: center;
+  margin: 4px 0 0;
+}
+/* a hand chip shown but not playable (online: opponent's turn) */
+.hand .tile.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+  filter: saturate(0.6);
+}
+/* shot-clock pill in the status line */
+.status .clk {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef4e6;
+  color: var(--frame);
+  font-variant-numeric: tabular-nums;
+}
+.status .clk.low {
+  background: #fde2e0;
+  color: #c0392b;
+}
+
+.modal.end .forfeit-note {
+  text-align: center;
+  color: #4a5a4a;
+  margin: -4px 0 8px;
+  font-style: italic;
+}
