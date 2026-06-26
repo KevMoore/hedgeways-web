@@ -45,6 +45,7 @@ const ALL_ORI: OriSpec[] = [
   ["H", true],
   ["V", true],
 ];
+const DEFAULT_ORI = 1; // ["V", false] — a fresh hedge lays vertical (top-to-bottom)
 
 export class GameUI {
   game: Game;
@@ -59,7 +60,7 @@ export class GameUI {
   private selectedId: number | null = null;
   /** Current preview/placement orientation. Default 1 = V (top→bottom) to
    *  match the hand chip's vertical 3-segment layout. */
-  private oriIndex = 1;
+  private oriIndex = DEFAULT_ORI;
   private busy = false;
   private invalidTimer: number | null = null;
   private botTimer: number | null = null;
@@ -145,6 +146,8 @@ export class GameUI {
     root.querySelector("#btn-confirm")!.addEventListener("click", () => this.confirm());
     root.querySelector("#btn-help")!.addEventListener("click", () => showHowTo());
     root.querySelector("#btn-fit")!.addEventListener("click", () => this.scene.recenter());
+    root.querySelector("#btn-zoom-in")!.addEventListener("click", () => this.scene.zoomStep(1.35, this.userTileCenter()));
+    root.querySelector("#btn-zoom-out")!.addEventListener("click", () => this.scene.zoomStep(1 / 1.35, this.userTileCenter()));
     root.querySelector("#btn-sound")!.addEventListener("click", (e) => this.toggleSound(e));
     root.querySelector("#btn-quit")!.addEventListener("click", () => this.confirmQuit());
     root.querySelector("#btn-bag")!.addEventListener("click", () => this.showBag());
@@ -696,6 +699,22 @@ export class GameUI {
     void y;
   }
 
+  /** Centre (world cell-centre) of the hedges the player is laying this turn, so
+   *  the zoom buttons home in on the player's own tiles. Undefined when nothing
+   *  is pending yet — the zoom then just scales around the current view. */
+  private userTileCenter(): { x: number; y: number } | undefined {
+    let n = 0;
+    let sx = 0;
+    let sy = 0;
+    for (const p of this.pending)
+      for (const c of p.cells) {
+        sx += c.x + 0.5;
+        sy += c.y + 0.5;
+        n++;
+      }
+    return n ? { x: sx / n, y: sy / n } : undefined;
+  }
+
   /** Shared ghost/finger-marker update from a raw client point. Used by both
    *  drag entry points (hand-chip drag, board-pickup drag) AND by the scene's
    *  auto-pan callback — whenever the camera moves, the cell under the cached
@@ -709,10 +728,6 @@ export class GameUI {
       return;
     }
     const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.currentOri(), this.liftSide);
-    // First time a drag reaches the board, zoom in toward the tile so placing /
-    // rotating on a large (zoomed-out) board is precise. focusForPlacement
-    // no-ops once already zoomed in, so this effectively fires once per drag.
-    if (this.dragging) this.scene.focusForPlacement(target[0], target[1]);
     // The finger dot only makes sense when the ghost is lifted away from the
     // finger (touch hand-placement). On a flush drag the ghost sits at the
     // finger, so the dot would just sit under it — skip it.
@@ -1129,9 +1144,11 @@ export class GameUI {
         this.liftSide = this.scene.sideOfClientX(startX);
         this.scene.setTouchGhostOffset(e.pointerType === "touch");
         // commit to the drag: select this tile so the ghost-preview path is live.
-        // Orientation is whatever the player last chose — never auto-flipped.
+        // A fresh hand tile always starts at the default orientation — the last
+        // tile's rotation shouldn't carry over to the next one dragged out.
         if (this.selectedId !== tileId) {
           this.selectedId = tileId;
+          this.oriIndex = DEFAULT_ORI;
           sfx.pickup();
           this.refreshHighlights();
           this.updateButtons();
@@ -1299,7 +1316,7 @@ export class GameUI {
     this.pendingOri = [];
     this.usedIds.clear();
     this.selectedId = null;
-    this.oriIndex = 1;
+    this.oriIndex = DEFAULT_ORI;
     this.dragging = false;
     this.grabOffset = { dx: 0, dy: 0 };
     this.scene.setHighlights(new Map());
@@ -1624,7 +1641,6 @@ const TEMPLATE = `
       <div class="brand">Hedge<span>ways</span></div>
       <div class="players"></div>
       <button id="btn-bag" class="bag" title="See what's left in the bag"></button>
-      <button id="btn-fit" class="icon" title="Recenter board">⤢</button>
       <button id="btn-sound" class="icon" title="Sound">🔊</button>
       <button id="btn-help" class="icon" title="How to play">?</button>
       <button id="btn-quit" class="icon" title="Quit to menu">✕</button>
@@ -1632,6 +1648,11 @@ const TEMPLATE = `
     <div class="stage">
       <canvas class="board"></canvas>
       <div class="turn-banner" hidden></div>
+      <div class="zoom-cta">
+        <button id="btn-zoom-in" class="zbtn" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="btn-zoom-out" class="zbtn" title="Zoom out" aria-label="Zoom out">−</button>
+        <button id="btn-fit" class="zbtn" title="Centre grid" aria-label="Centre grid">⤢</button>
+      </div>
     </div>
     <footer class="controls">
       <div class="status"></div>

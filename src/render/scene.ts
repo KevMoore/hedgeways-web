@@ -98,8 +98,6 @@ const POP_MS = 320; // tile placement pop-in
 const ACRE_POP_MS = 1300; // floating "+N acres" lifetime
 const BURST_MS = 1100; // enclosure celebration spark lifetime
 const IDLE_FRAME_MS = 1000 / 30; // cap ambient-livestock redraws at ~30fps
-const PLACE_ZOOM = 64; // px/cell the camera zooms IN to when a drag enters the board
-const PLACE_FOCUS_MIN = 42; // only auto-zoom-to-place when zoomed out below this (else it just lurches)
 const TOUCH_LIFT = 2; // cells a touch-dragged tile floats above the fingertip (clears the thumb)
 const BIRD_CAP = 22; // max decorative birds on the board (perf)
 const BEE_SWARM_CAP = 5; // max bee swarms on the board
@@ -927,27 +925,23 @@ export class Scene {
     if (on) this.ensureVisible();
   }
 
-  /** Zoom IN toward a board cell when a drag enters the board, so placing /
-   *  rotating on a large (zoomed-out) board is precise. Only ever zooms in
-   *  (no-op once at/above PLACE_ZOOM, so it fires once per drag and never
-   *  fights a player who is already zoomed further in). The target cell is
-   *  kept under its current screen pixel as the view scales up, so the tile
-   *  doesn't lurch. Locks the camera so the zoom persists past the placement.
-   *  Only kicks in when the board is genuinely zoomed OUT (below PLACE_FOCUS_MIN)
-   *  — at normal play scale the small zoom-and-pan just read as a lurch under the
-   *  finger, so we leave the camera alone and let the player pinch if they want. */
-  focusForPlacement(cellX: number, cellY: number): void {
-    if (this.tScale >= PLACE_FOCUS_MIN) return;
-    const wx = cellX + 0.5;
-    const wy = cellY + 0.5;
-    const [sx, sy] = this.worldToScreen(wx, wy); // current screen pos of the cell
-    const vw = this.canvas.width / this.dpr;
-    const vh = this.canvas.height / this.dpr;
-    this.userMovedCam = true; // persist like a manual zoom (no auto-refit after)
-    this.tScale = PLACE_ZOOM;
-    // solve cam so worldToScreen(wx,wy) at PLACE_ZOOM lands on the same pixel
-    this.tCamX = wx - (sx - vw / 2) / PLACE_ZOOM;
-    this.tCamY = wy - (sy - vh / 2) / PLACE_ZOOM;
+  /** Step the zoom by a factor, eased — drives the on-screen +/- zoom buttons.
+   *  If `focus` (a world cell-centre) is given, that point is pinned under its
+   *  current screen pixel as the scale changes, so the zoom homes in on the
+   *  player's tile instead of the viewport centre. Without it, zooms around the
+   *  current camera centre. */
+  zoomStep(factor: number, focus?: { x: number; y: number }): void {
+    this.userMovedCam = true; // player took zoom control — stop auto-refitting
+    const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.tScale * factor));
+    if (focus) {
+      const [sx, sy] = this.worldToScreen(focus.x, focus.y); // where it sits now
+      const vw = this.canvas.width / this.dpr;
+      const vh = this.canvas.height / this.dpr;
+      // solve cam so the focus point lands on the same pixel at the new scale
+      this.tCamX = focus.x - (sx - vw / 2) / next;
+      this.tCamY = focus.y - (sy - vh / 2) / next;
+    }
+    this.tScale = next;
     this.needsDraw = true;
   }
 

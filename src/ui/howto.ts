@@ -350,7 +350,7 @@ export function showHowTo(): void {
     ["👆", "Drag a hedge onto the field — or tap a hedge, then tap a square — to lay it"],
     ["↻", "Rotate spins the selected hedge; Undo takes back a pending hedge"],
     ["✅", "Confirm turn once you're happy with your hedges"],
-    ["🖐️", "Drag to pan, pinch or scroll to zoom, ⤢ recenters the board"],
+    ["🖐️", "Drag to pan; pinch, scroll or the +/− buttons to zoom; ⤢ centres the grid"],
     ["🔊", "Mute or unmute sound"],
     ["✕", "Quit to the menu — your game is saved"],
   ] as [string, string][]) {
