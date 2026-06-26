@@ -223,26 +223,42 @@ export class GameUI {
     });
   }
 
-  /** Animated bot placement: each tile of the move is appended to `pending`
-   *  in sequence with a `place` sfx, the renderer's pop-in, and a connect-ring
-   *  + chime when it abuts a matching neighbour — same feedback the human gets.
-   *  The whole move is then committed atomically; a beat is held afterwards so
+  /** Animated bot placement with a think→place→think rhythm: each tile is
+   *  appended to `pending` in sequence with a `place` sfx, the renderer's pop-in,
+   *  and a connect-ring + chime when it abuts a matching neighbour — same feedback
+   *  the human gets — but a visible "thinking…" beat (amber glow + status) is held
+   *  before each subsequent hedge so the bot reads as deliberating rather than
+   *  dumping its whole hand at once. The move is then committed atomically; a beat
+   *  is held afterwards so
    *  the placement (and any scoring celebration) reads before the turn passes.
    *  The engine state isn't touched until commit, so a mid-animation teardown
    *  cleanly aborts. */
   private async botLayMoveAnimated(move: Move, actor: { name: string; animal: string; colour?: string }): Promise<void> {
     this.busy = true;
-    this.setBotThinking(false); // done deliberating — it's laying now
     const rm = this.reduceMotion;
-    const STEP_MS = rm ? 150 : 480; // gap between successive hedges in a multi-tile lay
+    const THINK_MS = rm ? 120 : 540; // visible "thinking…" beat before each extra hedge
+    const SETTLE_MS = rm ? 90 : 300; // brief pause after a hedge lands, before the next ponder
+    const who = `${actor.animal} ${actor.name}`;
     for (let i = 0; i < move.tiles.length; i++) {
       if (!this.alive) return;
       if (this.game.currentPlayer !== actor) return; // turn changed under us
+      // Deliberate before each subsequent hedge (the first is covered by the
+      // pre-lay planning beat) — amber "thinking…" glow + status, so the bot
+      // reads as mulling each placement instead of dumping its whole hand at once.
+      if (i > 0) {
+        this.setBotThinking(true);
+        this.setStatus(`${who} ${this.botThinkingLine(i)}`);
+        await this.botDelay(Math.round(THINK_MS * (0.75 + Math.random() * 0.5)));
+        if (!this.alive || this.game.currentPlayer !== actor) return;
+      }
+      // Lay the hedge.
+      this.setBotThinking(false);
       const t = move.tiles[i];
       const cells = t.cells.map((c) => ({ ...c }));
       this.pending.push({ tileId: t.tileId, cells });
       this.pendingOri.push(0); // orientation doesn't matter for the visualisation
       sfx.place();
+      this.setStatus(`${who} plants a hedge 🌿`);
       this.syncScene();
       // Reward connections the same way a human placement does — a ring flash +
       // chime on cells that just clicked into a matching-colour neighbour.
@@ -251,7 +267,7 @@ export class GameUI {
         sfx.connect();
         this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
       }
-      if (i < move.tiles.length - 1) await this.botDelay(STEP_MS);
+      if (i < move.tiles.length - 1) await this.botDelay(SETTLE_MS);
     }
     if (!this.alive) return;
     // Let the last tile's pop-in settle before committing.
@@ -1044,6 +1060,19 @@ export class GameUI {
       "is reading the land…",
     ];
     return lines[(playerId + this.game.turn) % lines.length];
+  }
+
+  /** A "thinking…" line shown before each extra hedge in a multi-tile lay, so the
+   *  pauses between placements clearly read as deliberation. Varied per tile to
+   *  stay un-robotic. */
+  private botThinkingLine(i: number): string {
+    const lines = [
+      "is thinking…",
+      "ponders the next hedge…",
+      "eyes another spot…",
+      "weighs a second hedge…",
+    ];
+    return lines[(i + this.game.turn) % lines.length];
   }
 
   private toggleSound(e: Event): void {
