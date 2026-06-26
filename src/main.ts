@@ -189,12 +189,47 @@ function makeNetHandlers(): NetHandlers {
 
 function showWaiting(code: string): void {
   clearOverlays();
+  const canShare = typeof navigator !== "undefined" && !!navigator.share;
   const back = overlay(`
     <h2>Game ready</h2>
     <p>Share this code with your opponent:</p>
-    <div class="room-code">${code}</div>
+    <div class="room-code" id="ov-code-display" title="Tap to copy">${code}</div>
+    <div class="end-btns">
+      <button class="btn primary" id="ov-copy">📋 Copy code</button>
+      ${canShare ? `<button class="btn" id="ov-share">Share…</button>` : ""}
+    </div>
     <p class="wait-needed">Waiting for an opponent…</p>
     <div class="end-btns"><button class="btn" id="ov-cancel">Cancel</button></div>`);
+
+  const shareText = `Join my Hedgeways game! Code: ${code} — play at https://hedgeways.surge.sh`;
+  const copyBtn = back.querySelector<HTMLButtonElement>("#ov-copy")!;
+  const flash = (msg: string) => {
+    const original = "📋 Copy code";
+    copyBtn.textContent = msg;
+    window.setTimeout(() => (copyBtn.textContent = original), 1500);
+  };
+  const copyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      flash("✓ Copied!");
+    } catch {
+      // clipboard API blocked (e.g. non-secure context) — fall back to selecting it
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(back.querySelector("#ov-code-display")!);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      flash("Select & copy");
+    }
+  };
+  copyBtn.addEventListener("click", copyCode);
+  back.querySelector("#ov-code-display")!.addEventListener("click", copyCode);
+  back.querySelector("#ov-share")?.addEventListener("click", () => {
+    navigator.share({ title: "Hedgeways", text: shareText }).catch(() => {
+      /* user dismissed the share sheet — no-op */
+    });
+  });
+
   back.querySelector("#ov-cancel")!.addEventListener("click", () => {
     clearSession();
     teardownNet();

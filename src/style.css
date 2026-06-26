@@ -1369,6 +1369,10 @@ body {
   padding: 14px 8px;
   margin: 10px 0;
   user-select: all;
+  cursor: pointer;
+}
+.room-code:active {
+  transform: scale(0.98);
 }
 .wait-needed {
   text-align: center;
