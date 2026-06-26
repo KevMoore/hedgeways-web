@@ -85,4 +85,34 @@ describe("redactFor — the online security boundary", () => {
     const r = redactFor(server.toSnapshot(), 0);
     expect(r.players[1].hand.every(isPlaceholder)).toBe(true);
   });
+
+  it("redacts correctly for a 4-seat table (2 humans + 2 bots)", () => {
+    // online 4-player: each seat must see only its OWN hand, never the bag or the
+    // three other hands — regardless of which seats are bots.
+    const cfg4 = {
+      seed: 0xbadbeef,
+      players: [
+        { name: "Human0", isBot: false },
+        { name: "Human1", isBot: false },
+        { name: "Bot2", isBot: true },
+        { name: "Bot3", isBot: true },
+      ],
+    };
+    const snap = new Game(cfg4).toSnapshot();
+    expect(snap.players.length).toBe(4);
+    for (const seat of [0, 1, 2, 3]) {
+      const r = redactFor(snap, seat);
+      expect(r.config.seed).toBeUndefined();
+      expect(r.bag.every(isPlaceholder)).toBe(true);
+      expect(r.players[seat].hand).toEqual(snap.players[seat].hand);
+      expect(r.players[seat].hand.some(isPlaceholder)).toBe(false);
+      for (let i = 0; i < 4; i++) {
+        if (i === seat) continue;
+        expect(r.players[i].hand.length).toBe(snap.players[i].hand.length);
+        expect(r.players[i].hand.every(isPlaceholder)).toBe(true);
+      }
+      // isBot flags stay visible — the client needs them to drive turn UI
+      expect(r.players.map((p) => p.isBot)).toEqual([false, false, true, true]);
+    }
+  });
 });

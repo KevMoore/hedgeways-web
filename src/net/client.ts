@@ -1,14 +1,24 @@
 import type { GameSnapshot, TurnResult } from "../game/game";
 import type { Move } from "../game/types";
-import type { ClientMsg, LobbySeat, OnlineKit, ServerMsg } from "./protocol";
+import { PROTOCOL_VERSION, type ClientMsg, type LobbySlot, type OnlineKit, type ServerMsg } from "./protocol";
+
+/** The lobby table as the client sees it (host-only fields are per-recipient). */
+export interface LobbyInfo {
+  slots: LobbySlot[];
+  size: number;
+  humans: number;
+  minHumans: number;
+  youAreHost: boolean;
+  canStart: boolean;
+}
 
 export interface NetHandlers {
   onSeated?(code: string, seat: number, token: string): void;
-  onLobby?(seats: LobbySeat[], needed: number): void;
+  onLobby?(info: LobbyInfo): void;
   onState?(snap: GameSnapshot, last: TurnResult | undefined, mySeat: number, turnDeadline: number): void;
-  onOpponentLeft?(graceMs: number): void;
-  onOpponentBack?(): void;
-  onOpponentForfeit?(): void;
+  /** a human dropped/quit; graceMs > 0 means a reclaim window (game paused), 0 means a bot took over now */
+  onPlayerLeft?(seat: number, name: string, graceMs: number): void;
+  onPlayerBack?(seat: number, name: string): void;
   onGhost?(cells: [number, number][]): void;
   onClosed?(reason: string): void;
   onError?(reason: string): void;
@@ -88,15 +98,20 @@ export class NetClient {
       case "seated":
         return void h.onSeated?.(msg.code, msg.seat, msg.token);
       case "lobby":
-        return void h.onLobby?.(msg.seats, msg.needed);
+        return void h.onLobby?.({
+          slots: msg.slots,
+          size: msg.size,
+          humans: msg.humans,
+          minHumans: msg.minHumans,
+          youAreHost: msg.youAreHost,
+          canStart: msg.canStart,
+        });
       case "state":
         return void h.onState?.(msg.snap, msg.last, msg.mySeat, msg.turnDeadline);
-      case "opponentLeft":
-        return void h.onOpponentLeft?.(msg.graceMs);
-      case "opponentBack":
-        return void h.onOpponentBack?.();
-      case "opponentForfeit":
-        return void h.onOpponentForfeit?.();
+      case "playerLeft":
+        return void h.onPlayerLeft?.(msg.seat, msg.name, msg.graceMs);
+      case "playerBack":
+        return void h.onPlayerBack?.(msg.seat, msg.name);
       case "ghost":
         return void h.onGhost?.(msg.cells);
       case "roomClosed":
@@ -111,13 +126,16 @@ export class NetClient {
   }
 
   create(kit: OnlineKit): void {
-    this.send({ t: "create", kit });
+    this.send({ t: "create", kit, version: PROTOCOL_VERSION });
   }
   join(code: string, kit: OnlineKit): void {
-    this.send({ t: "join", code, kit });
+    this.send({ t: "join", code, kit, version: PROTOCOL_VERSION });
   }
   reconnect(code: string, token: string): void {
-    this.send({ t: "reconnect", code, token });
+    this.send({ t: "reconnect", code, token, version: PROTOCOL_VERSION });
+  }
+  start(): void {
+    this.send({ t: "start" });
   }
   move(move: Move): void {
     this.send({ t: "move", move });

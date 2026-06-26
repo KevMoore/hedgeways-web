@@ -6,7 +6,7 @@ import type { Difficulty } from "./game/types";
 import type { GameConfig, GameSnapshot, TurnResult } from "./game/game";
 import { describeSave, loadActive } from "./game/persistence";
 import { FARMERS, LIVESTOCK, PLAYER_KITS } from "./game/constants";
-import { NetClient, clearSession, loadSession, saveSession, type NetHandlers, type OnlineSession } from "./net/client";
+import { NetClient, clearSession, loadSession, saveSession, type LobbyInfo, type NetHandlers, type OnlineSession } from "./net/client";
 import type { OnlineKit } from "./net/protocol";
 import { mountHomeCritters } from "./ui/home-critters";
 import { mountFarmScene } from "./ui/farm-scene";
@@ -20,6 +20,8 @@ let stopHome: (() => void) | null = null;
 let net: NetClient | null = null;
 /** false until the first authoritative state arrives and the online board mounts */
 let onlineStarted = false;
+/** the room code we're in, used to (re)render the lobby on each lobby update */
+let myCode = "";
 
 function teardownNet(): void {
   net?.close();
@@ -116,12 +118,11 @@ function buildKit(farmerIdx: number, livestockIdx: number): OnlineKit {
 function makeNetHandlers(): NetHandlers {
   return {
     onSeated(code: string, seat: number, token: string) {
+      myCode = code;
       saveSession({ code, token, seat });
-      if (seat === 0) showWaiting(code); // creator: show the code to share
     },
-    onLobby(_seats, needed: number) {
-      const w = app.querySelector(".wait-needed");
-      if (w) w.textContent = needed > 0 ? "Waiting for an opponent…" : "Opponent found — starting!";
+    onLobby(info: LobbyInfo) {
+      renderLobby(info); // every seat sees the table fill; host gets the Start button
     },
     onState(snap: GameSnapshot, last: TurnResult | undefined, mySeat: number, turnDeadline: number) {
       // any authoritative state means we're connected and in sync again
@@ -135,15 +136,15 @@ function makeNetHandlers(): NetHandlers {
         ui?.applyServerState(snap, last, mySeat, turnDeadline);
       }
     },
-    onOpponentLeft(graceMs: number) {
-      ui?.showOpponentLeft(graceMs);
+    onPlayerLeft(_seat: number, name: string, graceMs: number) {
+      // graceMs > 0: a human dropped and the game is paused while we wait for them.
+      // graceMs === 0: a bot has already taken the seat — the next state shows it,
+      // so just flag it briefly.
+      if (graceMs > 0) ui?.showOpponentLeft(graceMs, name);
+      else ui?.notePlayerLeft(name);
     },
-    onOpponentBack() {
-      ui?.showOpponentBack();
-    },
-    onOpponentForfeit() {
-      clearSession(); // the room is gone server-side; don't try to rejoin it
-      ui?.showForfeitWin();
+    onPlayerBack(_seat: number, name: string) {
+      ui?.showOpponentBack(name);
     },
     onGhost(cells: [number, number][]) {
       ui?.applyOpponentGhost(cells);
@@ -188,33 +189,59 @@ function makeNetHandlers(): NetHandlers {
   };
 }
 
-function showWaiting(code: string): void {
-  clearOverlays();
+/** One lobby slot row: a joined human (their farmer kit) or an empty slot that
+ *  will become a bot when the host starts. */
+function lobbySlotHtml(slot: LobbyInfo["slots"][number]): string {
+  if (slot.type === "human") {
+    const tag = slot.connected ? "" : `<span class="lslot-tag">reconnecting…</span>`;
+    return `<div class="lslot" style="--c:${slot.colour ?? "#888"}">
+      <span class="lslot-pic">${slot.animal ?? "🧑‍🌾"}</span>
+      <span class="lslot-name">${slot.name}</span>${tag}</div>`;
+  }
+  return `<div class="lslot empty">
+    <span class="lslot-pic">🤖</span>
+    <span class="lslot-name">Bot</span>
+    <span class="lslot-tag">fills on start</span></div>`;
+}
+
+/** Render (or re-render) the pre-game lobby. Driven by every `lobby` message so
+ *  all seats watch the table fill; only the host sees an enabled Start button. */
+function renderLobby(info: LobbyInfo): void {
+  if (onlineStarted) return; // the game has begun — ignore any late lobby frame
+  const code = myCode;
   const canShare = typeof navigator !== "undefined" && !!navigator.share;
+  const note = info.youAreHost
+    ? info.canStart
+      ? "Everyone in? Start whenever you're ready — empty seats become bots."
+      : `Waiting for at least ${info.minHumans} players to join…`
+    : "Waiting for the host to start…";
+  clearOverlays();
   const back = overlay(`
-    <h2>Game ready</h2>
-    <p>Share this code with your opponent:</p>
+    <h2>Game lobby</h2>
+    <p>Share this code so friends can join:</p>
     <div class="room-code" id="ov-code-display" title="Tap to copy">${code}</div>
     <div class="end-btns">
-      <button class="btn primary" id="ov-copy">📋 Copy code</button>
+      <button class="btn" id="ov-copy">📋 Copy code</button>
       ${canShare ? `<button class="btn" id="ov-share">Share…</button>` : ""}
     </div>
-    <p class="wait-needed">Waiting for an opponent…</p>
-    <div class="end-btns"><button class="btn" id="ov-cancel">Cancel</button></div>`);
+    <div class="lobby-slots">${info.slots.map(lobbySlotHtml).join("")}</div>
+    <p class="lobby-note">${note}</p>
+    <div class="end-btns">
+      ${info.youAreHost ? `<button class="btn primary" id="ov-start" ${info.canStart ? "" : "disabled"}>Start game</button>` : ""}
+      <button class="btn" id="ov-cancel">Leave</button>
+    </div>`);
 
   const shareText = `Join my Hedgeways game! Code: ${code} — play at https://hedgeways.surge.sh`;
   const copyBtn = back.querySelector<HTMLButtonElement>("#ov-copy")!;
   const flash = (msg: string) => {
-    const original = "📋 Copy code";
     copyBtn.textContent = msg;
-    window.setTimeout(() => (copyBtn.textContent = original), 1500);
+    window.setTimeout(() => (copyBtn.textContent = "📋 Copy code"), 1500);
   };
   const copyCode = async () => {
     try {
       await navigator.clipboard.writeText(code);
       flash("✓ Copied!");
     } catch {
-      // clipboard API blocked (e.g. non-secure context) — fall back to selecting it
       const sel = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(back.querySelector("#ov-code-display")!);
@@ -230,8 +257,9 @@ function showWaiting(code: string): void {
       /* user dismissed the share sheet — no-op */
     });
   });
-
+  back.querySelector("#ov-start")?.addEventListener("click", () => net?.start());
   back.querySelector("#ov-cancel")!.addEventListener("click", () => {
+    net?.leave();
     clearSession();
     teardownNet();
     renderStart();
@@ -261,6 +289,7 @@ function connectJoin(code: string, kit: OnlineKit): void {
 /** Try to rejoin an in-progress game after a refresh/disconnect. */
 function tryReconnect(sess: OnlineSession): void {
   teardownNet();
+  myCode = sess.code; // so a lobby re-render after reconnect knows the room code
   reconnecting = true; // a hard error here means the game is gone → back to menu
   net = new NetClient(makeNetHandlers());
   net.connect(() => net?.reconnect(sess.code, sess.token));
@@ -270,7 +299,7 @@ function tryReconnect(sess: OnlineSession): void {
 function openOnlineMenu(kit: OnlineKit): void {
   const back = overlay(`
     <h2>Play online</h2>
-    <p>Head-to-head against a friend.</p>
+    <p>Play with 2–4 friends. Any empty seats become bots.</p>
     <div class="online-opts">
       <button class="btn primary" id="ov-create">Create a game</button>
       <div class="join-row">

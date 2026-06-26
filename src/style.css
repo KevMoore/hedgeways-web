@@ -1519,6 +1519,48 @@ body {
   text-align: center;
   color: #4a5a4a;
 }
+.lobby-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.lslot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 2px solid var(--c, #888);
+  background: color-mix(in srgb, var(--c, #888) 12%, #fff);
+}
+.lslot.empty {
+  border-style: dashed;
+  border-color: #b9c4b0;
+  background: #f4f7ef;
+  opacity: 0.85;
+}
+.lslot-pic {
+  font-size: 22px;
+  line-height: 1;
+}
+.lslot-name {
+  font-weight: 700;
+  color: var(--frame);
+}
+.lslot.empty .lslot-name {
+  color: #7a8a72;
+}
+.lslot-tag {
+  margin-left: auto;
+  font-size: 12px;
+  color: #7a8a72;
+}
+.lobby-note {
+  text-align: center;
+  color: #4a5a4a;
+  margin: 6px 0 2px;
+}
 .online-opts {
   display: flex;
   flex-direction: column;

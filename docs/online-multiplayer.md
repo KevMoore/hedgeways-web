@@ -1,7 +1,47 @@
 # Online Multiplayer (Human vs Human) — Plan
 
-**Status:** ✅ built on branch `feat/online-multiplayer` (local-only, not deployed).
-**Scope:** live, 2-human, head-to-head.
+**Status:** ✅ built. Originally 2-human H-v-H; extended to **up to 4 seats with
+bot-fill** (branch `online-4p-bots`) — see "4-player tables + bot fill" below.
+**Scope:** live, 2–4 players per room; empty seats become server-driven bots.
+
+## 4-player tables + bot fill
+
+The room is a **fixed 4-seat table**. Humans join by code; when the **host** (lowest
+connected human seat) starts, every empty seat is filled by a **bot the server drives**
+via the pure `chooseAiMove`. Design decisions (grilled out with the owner):
+
+- **Start trigger:** host-controlled. The lobby shows a **Start** button, gated until
+  **≥2 humans** are seated (`MIN_HUMANS`). Online is never solo-vs-bots — that's the
+  offline game.
+- **Table is locked at start.** No new humans join a running game (`join` rejects once
+  `started`). The only post-start seat changes are drop→bot and own-seat reconnect.
+- **Bots:** fixed `medium` difficulty (expert is deliberately *excluded* online — ISMCTS
+  per bot per turn would tax the Render free box). Each bot draws a distinct farmer from
+  the full roster of 8 (with their personality `style`), so the board stays readable.
+- **Bot turns** run server-side in `scheduleTurn`/`runBotTurn`: a bot gets a short jittered
+  delay (`BOT_MOVE_MS`, env-overridable to `0` for e2e), then `chooseAiMove → commit →
+  broadcast`, chaining through consecutive bots. Bots are exempt from the human shot-clock.
+- **Disconnect → bot.** A dropped human's seat is held for the grace period (reconnect
+  reclaims it); on grace expiry — or an explicit mid-game quit — the seat **converts to a
+  bot** (`seatToBot`) and the game plays on. The game ends only when nobody human remains
+  (room retired). There is **no forfeit-win** mid-game anymore.
+- **Below 2 humans mid-game:** the game continues to its natural end — `MIN_HUMANS` is a
+  *start gate*, not a per-turn invariant.
+- **Rematch** fires when every *connected human* seat has voted (bots auto-accept; dropped
+  humans don't block — their seats refill as bots).
+- **Protocol gate:** `PROTOCOL_VERSION` is sent on create/join/reconnect; a mismatch (stale
+  surge-cached client vs new authority) is rejected with a clean "refresh to update". Deploy
+  **server first**, then the client, then bust the surge cache.
+
+Key code: `server/index.ts` (`fillBots`, `seatToBot`, `runBotTurn`, host/lobby helpers),
+`src/net/protocol.ts` (`MAX_SEATS`/`MIN_HUMANS`/`BOT_MOVE_MS`/`PROTOCOL_VERSION`, richer
+`lobby` message + `LobbySlot`, `start` client msg, `playerLeft`/`playerBack`), `src/main.ts`
+(`renderLobby` interactive lobby with Start button + bot-preview slots). The engine, the
+per-seat `redactFor`, and the in-game `beginOnlineTurn` were already N-player-safe.
+
+---
+
+### Original 2-human plan (below) — retained for protocol/security context.
 
 ## Running it locally
 

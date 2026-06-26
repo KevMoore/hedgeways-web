@@ -254,20 +254,27 @@ export class GameUI {
   /** Opponent dropped: freeze the game and run a live grace countdown. The turn
    *  shot-clock is paused on the server too, so neither player is penalised for
    *  the other's blip. busy is cleared when the authoritative state resumes. */
-  showOpponentLeft(graceMs: number): void {
+  showOpponentLeft(graceMs: number, name?: string): void {
     if (!this.online) return;
     this.hideBotBanner();
     this.busy = true; // no input while the game is paused
     this.renderHand(false, false, { seat: this.online.mySeat, interactive: false });
     this.updateButtons();
     this.turnDeadline = Date.now() + graceMs;
-    this.startClock("Opponent disconnected — waiting for them to return");
+    this.startClock(`${name ?? "A player"} disconnected — waiting for them to return`);
   }
 
-  /** Opponent returned. A fresh authoritative state (with a reset clock) is
+  /** A player returned. A fresh authoritative state (with a reset clock) is
    *  broadcast right after this by the server, which re-renders and unfreezes. */
-  showOpponentBack(): void {
-    this.setStatus("Opponent reconnected — resuming…");
+  showOpponentBack(name?: string): void {
+    this.setStatus(`${name ?? "A player"} reconnected — resuming…`);
+  }
+
+  /** A player dropped/quit and a bot has already taken their seat. The next
+   *  authoritative state shows the bot playing; flag it briefly here. */
+  notePlayerLeft(name: string): void {
+    if (!this.online) return;
+    this.setStatus(`${name} left — a bot takes over their farm 🤖`);
   }
 
   /** Stream my current tentative placement (settled pending + an optional live
