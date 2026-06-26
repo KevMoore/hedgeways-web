@@ -49,6 +49,8 @@ tests/
 
 The **engine (`src/game/`) is the source of truth and is UI-agnostic** — `scene.ts` exposes a stable interface (`syncBoard`, `setGhost`, `setHighlights`, `fitBoard`, `flashEnclosed`, `tapHandler`) so the renderer could be swapped without touching game logic.
 
+**Online multiplayer (planned, not built):** live 2-human H-v-H over a thin WebSocket authority (Node `ws` on a Render free web service) that runs the existing pure `Game` and redacts secret state (`seed`/`bag`/other hands) per seat. Full plan + protocol in `docs/online-multiplayer.md`.
+
 ## Game rules (authoritative — from the physical rule card)
 
 - **You are farmers competing for land.** Use hedges as boundaries to enclose fields. Every enclosed empty square = 1 acre = 1 point.
@@ -92,5 +94,6 @@ The **engine (`src/game/`) is the source of truth and is UI-agnostic** — `scen
 
 - `pnpm deploy` ≠ `pnpm run deploy` (see Commands).
 - Surge edge caching (see Commands).
+- **Render: only ever touch the Hedgeways project** (`prj-d8v1prkvikkc73f50tgg`, workspace "Kevs Account"). The account hosts other live apps (LittlePeople, Avon, HSS, Snewham) — never deploy to / modify / suspend any non-Hedgeways service. Any new service goes *inside* the Hedgeways project, and only after explicit go-ahead.
 - **Vitest must stay on v2** — v4 needs Vite 6 and we're on Vite 5.
 - The expert opening move falls back to heuristic — if you change this, expert's first turn can take many seconds. Do not remove without instrumentation.

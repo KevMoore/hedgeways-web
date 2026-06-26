@@ -3,6 +3,7 @@ import { orient } from "../game/board";
 import { COLOUR_HEX, COLOUR_HEX_DARK, COLOUR_NAME, MAX_LAY } from "../game/constants";
 import { Game, type GameConfig, type GameSnapshot, type TurnResult, totalScore } from "../game/game";
 import { generateMoves } from "../game/moves";
+import { validateMove } from "../game/placement";
 import type { Cell, Colour, Difficulty, Move, Orientation, PlacedTile, Tile } from "../game/types";
 import { COLOURS, key } from "../game/types";
 import gsap from "gsap";
@@ -15,10 +16,23 @@ import { callout, confetti } from "./effects";
 import { showHowTo } from "./howto";
 import { clearActive, saveActive } from "../game/persistence";
 
+/** Wiring for an online (human-vs-human) game. The GameUI never owns the socket
+ *  — main.ts holds the NetClient, feeds snapshots in via applyServerState(), and
+ *  receives the player's move via sendMove(). The authoritative engine lives on
+ *  the server; this.game is a per-seat redacted MIRROR. */
+export interface OnlineOptions {
+  mySeat: number;
+  sendMove: (move: Move) => void;
+  requestRematch: () => void;
+  /** deadline (epoch ms) of the first turn, for the shot-clock */
+  turnDeadline?: number;
+}
+
 export interface GameUiOptions {
   onQuit?: () => void;
   onRestart?: (config: GameConfig) => void;
   restore?: GameSnapshot;
+  online?: OnlineOptions;
 }
 
 type OriSpec = [Orientation, boolean];
@@ -81,12 +95,25 @@ export class GameUI {
   private onRestart: ((config: GameConfig) => void) | null;
   private config: GameConfig;
 
+  // ---- online (human-vs-human) state ----
+  private online: OnlineOptions | null;
+  /** seat whose turn it was on the last applied snapshot — the mover to credit
+   *  with the next state's scoring FX (null until the first move). */
+  private prevCurrent: number | null = null;
+  private turnDeadline = 0;
+  private clockTimer: number | null = null;
+  /** the end-of-game modal, kept so a server-driven rematch can dismiss it */
+  private endModal: HTMLElement | null = null;
+
   constructor(root: HTMLElement, config: GameConfig, opts: GameUiOptions = {}) {
     this.root = root;
     this.config = config;
     this.onQuit = opts.onQuit ?? null;
     this.onRestart = opts.onRestart ?? null;
+    this.online = opts.online ?? null;
+    this.turnDeadline = opts.online?.turnDeadline ?? 0;
     this.game = new Game(config, opts.restore);
+    if (this.online) this.prevCurrent = this.game.current;
     // don't shout "bag low" on resume for tiers already passed before this session
     const n0 = this.game.bag.length;
     for (const t of [12, 6, 0]) if (n0 <= t) this.bagWarned.add(t);
@@ -127,9 +154,11 @@ export class GameUI {
     this.clearTurnState();
     this.renderHud();
     if (this.game.gameOver) {
-      clearActive();
+      this.stopClock();
+      if (!this.online) clearActive();
       return this.showEnd();
     }
+    if (this.online) return this.beginOnlineTurn();
     saveActive(this.game.toSnapshot()); // auto-save at each turn boundary
     const p = this.game.currentPlayer;
     // Bots may re-frame the camera (zoom out to follow the play); on the human's
@@ -155,6 +184,122 @@ export class GameUI {
     this.renderHand(false, true);
     this.setStatus(`Your turn — drag a hedge onto the field`);
     this.updateButtons();
+  }
+
+  // ---- online turn driver ----
+
+  /** Online turn dispatch: my turn → enable input; opponent's turn → wait. The
+   *  footer always shows MY hand (this client only ever sees its own). Stuck/skip
+   *  is the SERVER's job — we never mutate the local mirror here. */
+  private beginOnlineTurn(): void {
+    const mySeat = this.online!.mySeat;
+    const mine = this.game.current === mySeat;
+    this.scene.setAutoFrame(!mine); // follow the opponent's play, respect my zoom on my turn
+    if (mine) {
+      this.hideBotBanner();
+      this.renderHand(false, true, { seat: mySeat, interactive: true });
+      if (!this.game.hasLegalMove()) {
+        // empirically unreachable; the server's shot-clock will skip the turn.
+        this.stopClock();
+        this.setStatus("No legal placement — your turn will pass.");
+      } else {
+        this.startClock("Your turn — drag a hedge onto the field");
+      }
+    } else {
+      const opp = this.game.players[this.game.current];
+      this.showBotBanner(`${opp.animal} ${opp.name}`, "is planting", true, opp.colour);
+      this.renderHand(false, false, { seat: mySeat, interactive: false });
+      this.startClock(`${opp.farmerName ?? opp.name} is planting…`);
+    }
+    this.updateButtons();
+  }
+
+  /** Apply an authoritative (redacted) snapshot from the server, animate the move
+   *  that produced it, and hand the turn on. Drives BOTH my own committed moves
+   *  and the opponent's. */
+  applyServerState(snap: GameSnapshot, last: TurnResult | undefined, mySeat: number, turnDeadline: number): void {
+    if (!this.online) return;
+    this.online.mySeat = mySeat;
+    this.turnDeadline = turnDeadline;
+    // a rematch arrives as a fresh, non-over state — dismiss the end modal
+    if (this.endModal && !snap.gameOver) {
+      this.endModal.remove();
+      this.endModal = null;
+    }
+    const mover = this.prevCurrent;
+    const oldKeys = new Set(this.game.board.cells.keys());
+    this.clearTurnState(); // drop any local pending preview before the truth lands
+    this.busy = false;
+    this.game.applySnapshot(snap);
+    this.syncScene();
+    // celebrate the move just made (mine or theirs) using the authoritative result
+    if (mover !== null && last && last.ok) {
+      const newCells = [...this.game.board.cells.keys()].filter((k) => !oldKeys.has(k));
+      if (newCells.length) {
+        sfx.place();
+        this.scene.flashConnections(newCells);
+      }
+      const p = this.game.players[mover];
+      this.afterCommit(last, { name: p.name, animal: p.animal, colour: p.colour });
+    }
+    this.prevCurrent = this.game.current;
+    this.beginTurn();
+  }
+
+  /** Opponent dropped: freeze the game and run a live grace countdown. The turn
+   *  shot-clock is paused on the server too, so neither player is penalised for
+   *  the other's blip. busy is cleared when the authoritative state resumes. */
+  showOpponentLeft(graceMs: number): void {
+    if (!this.online) return;
+    this.hideBotBanner();
+    this.busy = true; // no input while the game is paused
+    this.renderHand(false, false, { seat: this.online.mySeat, interactive: false });
+    this.updateButtons();
+    this.turnDeadline = Date.now() + graceMs;
+    this.startClock("Opponent disconnected — waiting for them to return");
+  }
+
+  /** Opponent returned. A fresh authoritative state (with a reset clock) is
+   *  broadcast right after this by the server, which re-renders and unfreezes. */
+  showOpponentBack(): void {
+    this.setStatus("Opponent reconnected — resuming…");
+  }
+
+  /** The server rejected our move (e.g. a race, or an illegal lay it caught that
+   *  our local pre-check didn't). Un-stick the optimistic 'busy' wait and let the
+   *  player try again — no fatal overlay. */
+  showActionError(reason: string): void {
+    if (!this.online) return;
+    this.busy = false;
+    if (this.game.current === this.online.mySeat && !this.game.gameOver) {
+      this.clearTurnState();
+      this.renderHand(false, false, { seat: this.online.mySeat, interactive: true });
+      this.updateButtons();
+      this.startClock(`Rejected: ${reason} — try again`);
+    }
+  }
+
+  /** Update the shot-clock against the current turnDeadline, prefixed with `base`. */
+  private startClock(base: string): void {
+    this.stopClock();
+    const statusEl = this.root.querySelector(".status")!;
+    const tick = () => {
+      if (!this.turnDeadline) {
+        statusEl.textContent = base;
+        return;
+      }
+      const s = Math.max(0, Math.ceil((this.turnDeadline - Date.now()) / 1000));
+      statusEl.innerHTML = `${base} <b class="clk${s <= 10 ? " low" : ""}">${s}s</b>`;
+    };
+    tick();
+    this.clockTimer = window.setInterval(tick, 500);
+  }
+
+  private stopClock(): void {
+    if (this.clockTimer !== null) {
+      window.clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
   }
 
   private botMove(): void {
@@ -711,6 +856,25 @@ export class GameUI {
   private confirm(): void {
     if (this.pending.length === 0) return;
     const move: Move = { tiles: this.pending.map((t) => ({ tileId: t.tileId, cells: t.cells })) };
+    if (this.online) {
+      // Pre-validate locally for instant feedback; the server re-validates as the
+      // authority. On success, hand the move off and wait for the broadcast — the
+      // committed tiles + scoring arrive via applyServerState.
+      const v = validateMove(this.game.board, move.tiles);
+      if (!v.ok) {
+        sfx.invalid();
+        this.setStatus(`Can't confirm — ${v.reason}. Adjust your hedges and try again.`);
+        this.markDanger();
+        return;
+      }
+      this.clearDanger();
+      this.busy = true;
+      this.stopClock();
+      this.setStatus("Planting…");
+      this.updateButtons();
+      this.online.sendMove(move);
+      return;
+    }
     const actor = { name: "You", animal: this.game.currentPlayer.animal, colour: this.game.currentPlayer.colour };
     const res = this.game.commit(move);
     if (!res.ok) {
@@ -811,10 +975,13 @@ export class GameUI {
     return this.game.currentPlayer.hand.find((t) => t.id === id);
   }
 
-  private renderHand(hidden: boolean, animate = false): void {
+  private renderHand(hidden: boolean, animate = false, opts?: { seat?: number; interactive?: boolean }): void {
     const el = this.root.querySelector(".hand")!;
     el.innerHTML = "";
-    const p = this.game.currentPlayer;
+    // Online: the footer always shows THIS client's hand (opts.seat), regardless
+    // of whose turn it is, and is non-interactive when it isn't our move.
+    const p = this.game.players[opts?.seat ?? this.game.current];
+    const interactive = opts?.interactive ?? true;
     if (hidden || p.isBot) {
       el.innerHTML = `<div class="hand-hidden">${p.name}'s hedges</div>`;
       return;
@@ -833,7 +1000,8 @@ export class GameUI {
         seg.style.boxShadow = `inset 0 0 0 2px ${COLOUR_HEX_DARK[c]}`;
         d.appendChild(seg);
       }
-      this.attachTileInput(d, tile.id);
+      if (interactive) this.attachTileInput(d, tile.id);
+      else d.classList.add("disabled");
       el.appendChild(d);
       if (!prev.has(tile.id)) freshChips.push(d);
     }
@@ -1034,7 +1202,8 @@ export class GameUI {
   }
 
   private updateButtons(): void {
-    const human = !this.game.currentPlayer.isBot && !this.game.gameOver;
+    const myOnlineTurn = !this.online || (this.game.current === this.online.mySeat && !this.busy);
+    const human = !this.game.currentPlayer.isBot && !this.game.gameOver && myOnlineTurn;
     const canConfirm = human && this.pending.length > 0 && this.pendingFits();
     btn(this.root, "#btn-undo", human && this.pending.length > 0);
     // Rotate works on a selected (not-yet-placed) tile or the last pending one —
@@ -1128,6 +1297,7 @@ export class GameUI {
   /** Tear down: stop the render loop, cancel pending bot/animation timers. */
   dispose(): void {
     this.alive = false;
+    this.stopClock();
     if (this.botTimer !== null) window.clearTimeout(this.botTimer);
     if (this.invalidTimer !== null) window.clearTimeout(this.invalidTimer);
     for (const w of this.farmerWidgets) w.dispose();
@@ -1183,6 +1353,24 @@ export class GameUI {
   private showBag(): void {
     const bag = this.game.bag;
     const empty = bag.length === 0;
+    if (this.online) {
+      // online: the bag is hidden on the server; we only know the count.
+      const back = document.createElement("div");
+      back.className = "modal-back";
+      back.innerHTML = `
+        <div class="modal bag-modal">
+          <h2>🌱 ${bag.length} hedge${bag.length === 1 ? "" : "s"} left</h2>
+          <p>${empty ? "The bag is empty — everyone's playing out their final hands." : "The bag is shuffled on the server and hidden from both players — only the count is shared."}</p>
+          <div class="end-btns"><button class="btn primary" id="bag-close">Got it</button></div>
+        </div>`;
+      this.root.appendChild(back);
+      const close = () => back.remove();
+      back.querySelector("#bag-close")!.addEventListener("click", close);
+      back.addEventListener("click", (e) => {
+        if (e.target === back) close();
+      });
+      return;
+    }
     const tally: Partial<Record<Colour, number>> = {};
     for (const t of bag) for (const c of t.segments) tally[c] = (tally[c] ?? 0) + 1;
     const seg = (c: Colour) =>
@@ -1224,15 +1412,31 @@ export class GameUI {
     });
   }
 
-  private showEnd(): void {
+  /** The opponent forfeited a live game (quit / never returned) → this client
+   *  wins by default. Force the game over locally and show a win end screen. */
+  showForfeitWin(): void {
+    if (!this.online || this.game.gameOver) return;
+    this.stopClock();
+    this.hideBotBanner();
+    this.busy = true;
+    this.game.gameOver = true;
+    this.game.winnerId = this.online.mySeat;
+    this.showEnd({ forfeit: true });
+  }
+
+  private showEnd(opts?: { forfeit?: boolean }): void {
+    const forfeit = opts?.forfeit ?? false;
+    const mySeat = this.online?.mySeat ?? -1;
     const standings = this.game.standings();
     const winner = standings[0];
-    const tie = standings.filter((p) => totalScore(p) === totalScore(winner)).length > 1;
+    // a forfeit is always a win for the viewer (only the remaining player sees it)
+    const tie = !forfeit && standings.filter((p) => totalScore(p) === totalScore(winner)).length > 1;
+    const iWon = forfeit || (this.online ? winner.id === mySeat : winner.name === "You");
     const winLine = tie
       ? "Sundown — it's a tie!"
-      : winner.name === "You"
+      : iWon
         ? "Sundown — you win the farm!"
-        : `Sundown — ${winner.name} wins the farm!`;
+        : `Sundown — ${winner.farmerName ?? winner.name} wins the farm!`;
     confetti();
     sfx.win();
     const back = document.createElement("div");
@@ -1241,6 +1445,7 @@ export class GameUI {
       <div class="modal end">
         <div class="trophy">${tie ? "🤝" : "🚜"}</div>
         <h2>${winLine}</h2>
+        ${forfeit ? `<p class="forfeit-note">Your opponent forfeited the game.</p>` : ""}
         <table>${standings
           .map((p, i) => {
             const parts: string[] = [];
@@ -1250,13 +1455,14 @@ export class GameUI {
             const portrait = p.farmerId && getFarmerSprites().knows(p.farmerId)
               ? `<span class="endfarmer" data-fid="${p.farmerId}" data-pos="${i}"></span>`
               : `${p.animal}`;
-            return `<tr class="${i === 0 && !tie ? "win" : ""}"><td>${medal(i)} ${portrait} ${p.name}</td><td>${totalScore(p)} acre${totalScore(p) === 1 ? "" : "s"}${bonusNote}</td></tr>`;
+            const winRow = forfeit ? p.id === mySeat : i === 0 && !tie;
+            return `<tr class="${winRow ? "win" : ""}"><td>${medal(i)} ${portrait} ${p.name}</td><td>${totalScore(p)} acre${totalScore(p) === 1 ? "" : "s"}${bonusNote}</td></tr>`;
           })
           .join("")}</table>
         <div class="end-btns">
           <button class="btn" id="end-inspect">View field</button>
           <button class="btn" id="end-menu">Farmhouse</button>
-          <button class="btn primary" id="end-again">Next harvest</button>
+          ${forfeit ? "" : `<button class="btn primary" id="end-again">${this.online ? "Rematch" : "Next harvest"}</button>`}
         </div>
       </div>`;
     this.root.appendChild(back);
@@ -1278,14 +1484,25 @@ export class GameUI {
     const closeModal = () => {
       for (const w of podiumWidgets) w.dispose();
       back.remove();
+      if (this.endModal === back) this.endModal = null;
     };
+    this.endModal = back; // so a server rematch can tear it down
     back.querySelector("#end-inspect")!.addEventListener("click", closeModal);
     back.querySelector("#end-menu")!.addEventListener("click", () => {
       closeModal();
       if (this.onQuit) this.onQuit();
       else location.reload();
     });
-    back.querySelector("#end-again")!.addEventListener("click", () => {
+    back.querySelector("#end-again")?.addEventListener("click", () => {
+      if (this.online) {
+        // ask the server for a rematch; the fresh game arrives as a new state and
+        // closes this modal (see applyServerState). Reflect the wait here.
+        this.online.requestRematch();
+        const btn = back.querySelector("#end-again") as HTMLButtonElement;
+        btn.disabled = true;
+        btn.textContent = "Waiting for opponent…";
+        return;
+      }
       closeModal();
       this.restart();
     });
@@ -1295,6 +1512,14 @@ export class GameUI {
   /** Play one legal move for the current player; returns true if a move was laid. */
   autoPlayTurn(): boolean {
     if (this.game.gameOver) return false;
+    if (this.online) {
+      if (this.game.current !== this.online.mySeat || this.busy) return false;
+      const mine = generateMoves(this.game.board, this.game.players[this.online.mySeat].hand, { limit: 1, maxNodes: Infinity });
+      if (mine.length === 0) return false;
+      this.busy = true;
+      this.online.sendMove(mine[0]);
+      return true;
+    }
     const moves = generateMoves(this.game.board, this.game.currentPlayer.hand, { limit: 1, maxNodes: Infinity });
     if (moves.length === 0) {
       this.game.skipStuck();
