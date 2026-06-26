@@ -144,6 +144,9 @@ function makeNetHandlers(): NetHandlers {
       clearSession(); // the room is gone server-side; don't try to rejoin it
       ui?.showForfeitWin();
     },
+    onGhost(cells: [number, number][]) {
+      ui?.applyOpponentGhost(cells);
+    },
     onClosed(reason: string) {
       clearSession();
       teardownNet();
@@ -272,6 +275,7 @@ function startOnlineGame(snap: GameSnapshot, mySeat: number, turnDeadline: numbe
       mySeat,
       sendMove: (m) => net?.move(m),
       requestRematch: () => net?.rematch(),
+      sendGhost: (cells) => net?.ghost(cells),
       turnDeadline,
     },
   });

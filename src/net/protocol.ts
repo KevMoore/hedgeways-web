@@ -21,6 +21,7 @@ export type ClientMsg =
   | { t: "join"; code: string; kit: OnlineKit }
   | { t: "reconnect"; code: string; token: string }
   | { t: "move"; move: Move }
+  | { t: "ghost"; cells: [number, number][] } // live presence: my tentative cells (positions only)
   | { t: "rematch" }
   | { t: "leave" };
 
@@ -33,6 +34,7 @@ export type ServerMsg =
   | { t: "opponentLeft"; graceMs: number }
   | { t: "opponentBack" }
   | { t: "opponentForfeit" } // opponent quit / never returned → you win by default
+  | { t: "ghost"; cells: [number, number][] } // opponent's tentative cells, relayed live
   | { t: "roomClosed"; reason: string }
   | { t: "error"; reason: string };
 

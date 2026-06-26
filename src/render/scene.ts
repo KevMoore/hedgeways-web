@@ -118,6 +118,9 @@ export class Scene {
   private connectFlash = new Map<string, number>();
   private CONNECT_FLASH_MS = 600;
   private ghost: Ghost | null = null;
+  /** Online presence: cells the OPPONENT is tentatively placing this turn, shown
+   *  as colourless shadows (positions only — never their tile colours). */
+  private opponentGhost: Array<[number, number]> = [];
   /** When true, mobile touch drags are in "lifted" mode — game-ui passes
    *  ghost cells that sit above the finger, and a subtle dot is drawn at
    *  the finger position. The lift math (cell offset) is exposed via
@@ -246,6 +249,7 @@ export class Scene {
         this.bursts.length ||
         this.dangerCells.size > 0 ||
         this.ghost !== null || // pulse the held-tile ghost while it exists
+        this.opponentGhost.length > 0 || // pulse the opponent's presence shadows
         this.rotateAnims.length > 0 ||
         this.connectFlash.size > 0 ||
         panned ||
@@ -948,6 +952,22 @@ export class Scene {
     this.needsDraw = true;
   }
 
+  /** Online: gently pan (no zoom change) toward a set of cells so the watching
+   *  player's camera follows the opponent's tentative placement — adds suspense.
+   *  No-op for an empty set (don't lurch when the ghosts clear). */
+  followCells(cells: Array<[number, number]>): void {
+    if (!cells.length) return;
+    let sx = 0;
+    let sy = 0;
+    for (const [x, y] of cells) {
+      sx += x + 0.5;
+      sy += y + 0.5;
+    }
+    this.tCamX = sx / cells.length;
+    this.tCamY = sy / cells.length;
+    this.needsDraw = true;
+  }
+
   private boundsWithGhost(): { minX: number; minY: number; maxX: number; maxY: number } {
     let minX = Infinity,
       minY = Infinity,
@@ -1084,6 +1104,12 @@ export class Scene {
 
   setHighlights(cells: Map<string, Colour>): void {
     this.highlights = new Map(cells);
+    this.needsDraw = true;
+  }
+
+  /** Online presence: the opponent's tentative tile positions (colourless). */
+  setOpponentGhost(cells: Array<[number, number]>): void {
+    this.opponentGhost = cells;
     this.needsDraw = true;
   }
 
@@ -1567,6 +1593,27 @@ export class Scene {
         this.drawHedge(c.x, c.y, c.colour, ghostAlpha, !this.ghost.valid, ghostScale, mask);
       }
     }
+    // opponent presence (online) — colourless tile-shaped shadows where the
+    // opponent is tentatively placing. Positions only; never their colours.
+    if (this.opponentGhost.length) {
+      const op = (Math.sin(now / 300) + 1) / 2; // gentle ~0.5Hz breathe
+      const s = this.scale;
+      const pad = s * 0.1;
+      ctx.save();
+      ctx.lineWidth = Math.max(1, s * 0.035);
+      ctx.setLineDash([s * 0.16, s * 0.12]);
+      for (const [x, y] of this.opponentGhost) {
+        const [px, py] = this.worldToScreen(x, y);
+        ctx.fillStyle = `rgba(58,70,82,${0.2 + op * 0.16})`;
+        ctx.strokeStyle = `rgba(255,255,255,${0.32 + op * 0.22})`;
+        ctx.beginPath();
+        ctx.roundRect(px + pad, py + pad, s - pad * 2, s - pad * 2, s * 0.16);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // Touch finger indicator — small ring at the actual finger cell during a
     // touch drag, so the player can tell where their finger is even though
     // the placement target is the lifted ghost above.

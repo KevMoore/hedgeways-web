@@ -247,6 +247,21 @@ function handle(ws: WebSocket, msg: ClientMsg): void {
       return;
     }
 
+    case "ghost": {
+      // Live presence relay: the active player's tentative cell POSITIONS only
+      // (never colours/ids), forwarded to the opponent. Not part of game state,
+      // never validated, never stored. Capped to a sane size.
+      const at = conns.get(ws);
+      if (!at) return;
+      const room = rooms.get(at.code);
+      if (!room || !room.game || room.game.gameOver) return;
+      if (room.game.current !== at.seat) return; // only the player whose turn it is
+      if (!Array.isArray(msg.cells) || msg.cells.length > 9) return;
+      for (let i = 0; i < room.seats.length; i++)
+        if (i !== at.seat && room.seats[i].connected) send(room.seats[i].ws, { t: "ghost", cells: msg.cells });
+      return;
+    }
+
     case "rematch": {
       const at = conns.get(ws);
       if (!at) return;

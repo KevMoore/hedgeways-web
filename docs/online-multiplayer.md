@@ -27,6 +27,20 @@ pnpm exec playwright test online.spec  # two real browsers play a full game
 For a deployed server, set `VITE_WS_URL=wss://<host>` at build time; the client defaults to
 `ws://localhost:8787`.
 
+### Live server (Render)
+
+- **URL:** `wss://hedgeways-server.onrender.com` · health: `https://hedgeways-server.onrender.com/`
+- **Service:** `hedgeways-server` (`srv-d8v2jgg0697c73f4hp6g`), Render **free**, **Frankfurt**, tracks
+  `main`, auto-deploy on push. Dashboard: https://dashboard.render.com/web/srv-d8v2jgg0697c73f4hp6g
+- **Origin allowlist (CORS-equivalent):** localhost (any port), `*.onrender.com`, `hedgeways.surge.sh`.
+  Add more via the `ALLOWED_ORIGINS` env var (comma-separated).
+- **Test local client → live server:** `.env.local` holds `VITE_WS_URL=wss://hedgeways-server.onrender.com`
+  (gitignored). Delete it + restart `pnpm dev` to go back to the local authority.
+- **Free-tier note:** idle >15 min → ~60s cold start on the first connection (WS traffic keeps it
+  awake during play); in-memory rooms are lost on restart/redeploy.
+- **Pending manual step:** move the service into the Hedgeways project (`prj-d8v1prkvikkc73f50tgg`) via
+  the dashboard — the MCP can't assign a project.
+
 ## What was built
 
 - `src/game/redact.ts` — `redactFor(snap, seat)` + `Game.applySnapshot()`. The security boundary.
@@ -56,6 +70,16 @@ For a deployed server, set `VITE_WS_URL=wss://<host>` at build time; the client 
 - **No room leaks**: finished/abandoned rooms are retired once nobody's connected.
 - **End states covered**: last-hedge finish, deadlock (mutual timeout), tie, and win keyed to
   *seat* not name. Verified by `tests/e2e/online.spec.ts` (full game, forfeit, refresh-rejoin).
+
+## Live presence ("ghosting")
+
+While the active player arranges tiles, their **tentative cell positions** (never colours/ids)
+are streamed to the opponent as colourless shadows, and the watcher's camera gently pans to
+follow — a sense of "something's happening" before the tiles drop. It's a **separate presence
+channel** (`ghost` messages), never touched by `redactFor` or the authoritative snapshot:
+server relays it active-player→opponent only, capped, never stored. Hidden info preserved
+(positions reveal no colour; an adjacent hedge only hints what the commit reveals anyway).
+Relay verified by `scripts/ghost-smoke.ts`.
 
 ---
 

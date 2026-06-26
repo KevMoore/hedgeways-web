@@ -24,6 +24,8 @@ export interface OnlineOptions {
   mySeat: number;
   sendMove: (move: Move) => void;
   requestRematch: () => void;
+  /** stream my tentative tile positions (colourless) so the opponent sees presence */
+  sendGhost: (cells: [number, number][]) => void;
   /** deadline (epoch ms) of the first turn, for the shot-clock */
   turnDeadline?: number;
 }
@@ -104,6 +106,8 @@ export class GameUI {
   private clockTimer: number | null = null;
   /** the end-of-game modal, kept so a server-driven rematch can dismiss it */
   private endModal: HTMLElement | null = null;
+  /** last ghost frame sent, to avoid spamming identical presence updates */
+  private lastGhostKey = "";
 
   constructor(root: HTMLElement, config: GameConfig, opts: GameUiOptions = {}) {
     this.root = root;
@@ -263,6 +267,27 @@ export class GameUI {
    *  broadcast right after this by the server, which re-renders and unfreezes. */
   showOpponentBack(): void {
     this.setStatus("Opponent reconnected — resuming…");
+  }
+
+  /** Stream my current tentative placement (settled pending + an optional live
+   *  drag preview) to the opponent as colourless presence. Deduped so identical
+   *  frames aren't re-sent; only positions ever leave this client. */
+  private emitGhost(preview?: PlacedTile["cells"]): void {
+    if (!this.online || this.game.current !== this.online.mySeat) return;
+    const cells: [number, number][] = [];
+    for (const p of this.pending) for (const c of p.cells) cells.push([c.x, c.y]);
+    if (preview) for (const c of preview) cells.push([c.x, c.y]);
+    const key = cells.map((c) => c.join(",")).sort().join("|");
+    if (key === this.lastGhostKey) return;
+    this.lastGhostKey = key;
+    this.online.sendGhost(cells);
+  }
+
+  /** Render the opponent's tentative tiles (positions only — see scene) and pan
+   *  the camera to follow them, so the watcher feels the move building. */
+  applyOpponentGhost(cells: [number, number][]): void {
+    this.scene.setOpponentGhost(cells);
+    if (cells.length) this.scene.followCells(cells);
   }
 
   /** The server rejected our move (e.g. a race, or an illegal lay it caught that
@@ -566,6 +591,7 @@ export class GameUI {
     this.syncScene(); // refreshes rotate icon + status from pending
     this.renderHand(false);
     this.updateButtons();
+    this.emitGhost();
     // If any cell of the new tile sits next to a matching-colour neighbour
     // (committed or pending), reward the player with a chime + ring flash.
     const hits = this.connectingCells(cells, tile.id);
@@ -670,6 +696,7 @@ export class GameUI {
       // Drifted off the board — clear the ghost; release here will un-play.
       this.scene.setGhost(null, false);
       this.scene.setFingerMarker(null);
+      this.emitGhost(); // preview gone — fall back to just the settled pending
       return;
     }
     const { target, finger } = this.scene.liftedCellAt(clientX, clientY, this.currentOri(), this.liftSide);
@@ -708,6 +735,7 @@ export class GameUI {
       this.renderHand(false);
       this.updateButtons();
       sfx.unplay();
+      this.emitGhost();
       // Bounce the returning chip so it's obvious the tile is back in hand.
       const chip = this.root.querySelector<HTMLElement>(`.tile[data-tid="${tileId}"]`);
       if (chip) gsap.fromTo(chip, { scale: 0.4, y: -22 }, { scale: 1, y: 0, duration: 0.42, ease: "back.out(2.4)" });
@@ -736,6 +764,7 @@ export class GameUI {
       this.syncScene();
       this.renderHand(false);
       this.updateButtons();
+      this.emitGhost();
       return;
     }
     // Land at the new spot.
@@ -749,6 +778,7 @@ export class GameUI {
     this.syncScene();
     this.renderHand(false);
     this.updateButtons();
+    this.emitGhost();
     const hits = this.connectingCells(cells, tile.id);
     if (hits.length > 0) {
       sfx.connect();
@@ -770,6 +800,7 @@ export class GameUI {
     // validation (bray + bounce-back / flashInvalid) carries the "no" signal.
     const valid = this.dragging ? true : !this.overlapsOccupied(cells);
     this.scene.setGhost(cells, valid);
+    this.emitGhost(cells); // stream the live preview position to the opponent
   }
 
   private flashInvalid(cells: PlacedTile["cells"]): void {
@@ -835,6 +866,7 @@ export class GameUI {
       this.scene.startRotateAnim(fromCells, cells); // smooth 90° transition
       this.syncScene();
       this.updateButtons();
+      this.emitGhost();
       return;
     }
     this.flashInvalid(last.cells); // every other orientation overlaps — stay put
@@ -851,6 +883,7 @@ export class GameUI {
     this.renderHand(false);
     this.refreshHighlights();
     this.updateButtons();
+    this.emitGhost();
   }
 
   private confirm(): void {
@@ -872,6 +905,8 @@ export class GameUI {
       this.stopClock();
       this.setStatus("Planting…");
       this.updateButtons();
+      this.lastGhostKey = "";
+      this.online.sendGhost([]); // tiles are committing — drop the presence shadows
       this.online.sendMove(move);
       return;
     }
@@ -1260,6 +1295,7 @@ export class GameUI {
     this.grabOffset = { dx: 0, dy: 0 };
     this.scene.setHighlights(new Map());
     this.scene.setGhost(null, false);
+    this.scene.setOpponentGhost([]); // drop any opponent presence shadows
   }
 
   /** A warm, farmer-ish "thinking" line for a bot's turn (stable per turn). */

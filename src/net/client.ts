@@ -9,6 +9,7 @@ export interface NetHandlers {
   onOpponentLeft?(graceMs: number): void;
   onOpponentBack?(): void;
   onOpponentForfeit?(): void;
+  onGhost?(cells: [number, number][]): void;
   onClosed?(reason: string): void;
   onError?(reason: string): void;
   /** transport-level drop (network), distinct from a server-initiated close */
@@ -96,6 +97,8 @@ export class NetClient {
         return void h.onOpponentBack?.();
       case "opponentForfeit":
         return void h.onOpponentForfeit?.();
+      case "ghost":
+        return void h.onGhost?.(msg.cells);
       case "roomClosed":
         return void h.onClosed?.(msg.reason);
       case "error":
@@ -118,6 +121,9 @@ export class NetClient {
   }
   move(move: Move): void {
     this.send({ t: "move", move });
+  }
+  ghost(cells: [number, number][]): void {
+    this.send({ t: "ghost", cells });
   }
   rematch(): void {
     this.send({ t: "rematch" });
