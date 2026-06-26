@@ -1,84 +1,55 @@
 /**
- * Animated livestock sprite-sheet support.
- *
- * Sheet: public/sprites/livestock.webp — 1024x1024, an 8x8 grid of 128px cells.
- * The background is already keyed to true alpha transparency offline, so the
- * renderer draws it directly (no runtime flood-fill). Frame index = row*8 + col
- * (0-based), left->right, top->bottom. Each animal spans two rows (~13 distinct
- * poses); the idle/walk/action/happy frame sets are classified per-animal in
- * ANIMALS below. Until the sheet loads the renderer falls back to the emoji.
+ * Animated livestock sprites — one AutoSprite-generated sheet per animal per
+ * animation state, sliced via the shared atlas core (see sprite-atlas.ts).
+ * Frame geometry lives in sprite-manifest.ts (generated from AutoSprite's atlas
+ * metadata); there are no hand-tuned grids here. Until a sheet loads the caller
+ * falls back to the emoji.
  */
-const COLS = 8;
+import { SpriteSet, prefersReducedMotion, type SpriteState } from "./sprite-atlas";
+import { ANIMAL_SHEETS } from "./sprite-manifest";
 
-interface AnimalFrames {
-  idle: number[];
-  walk: number[];
-  action: number[]; // peck / eat / graze
-  happy: number[];
-}
+export { prefersReducedMotion };
 
-// Keyed by the player-kit emoji. Frame indices are hand-classified to the actual
-// art: the sheet's poses aren't a clean idle/walk/action/happy run, and each
-// animal has only 2 (pig/cow) or 3 (chicken/sheep) head-down eat/peck/graze
-// frames, so the action cycle repeats one to fill four.
-const ANIMALS: Record<string, AnimalFrames> = {
-  "🐓": { idle: [0, 1], walk: [2, 3, 4, 5], action: [6, 8, 9, 8], happy: [10, 11, 12, 13] },
-  "🐷": { idle: [16, 17], walk: [18, 19, 20, 21], action: [22, 24, 22, 24], happy: [25, 26, 27, 28] },
-  "🐑": { idle: [32, 33], walk: [34, 35, 36, 37], action: [38, 40, 41, 40], happy: [42, 43, 44, 45] },
-  "🐮": { idle: [48, 49], walk: [50, 51, 52, 53], action: [54, 56, 54, 56], happy: [57, 58, 59, 60] },
-};
-
-const SRC = "/sprites/livestock.webp";
+/** Behaviour states the renderer asks for; "graze" maps to the action sheet. */
+export type AnimalState = "walk" | "graze" | "idle" | "happy";
 
 export class Sprites {
-  private img = new Image();
-  private loaded = false;
-  private fw = 0;
-  private fh = 0;
+  private sets = new Map<string, SpriteSet>();
 
-  constructor() {
-    this.img.onload = () => {
-      this.fw = this.img.width / COLS;
-      this.fh = this.fw; // square cells
-      this.loaded = this.fw > 0;
-    };
-    this.img.onerror = () => {
-      this.loaded = false;
-    };
-    this.img.src = SRC;
+  private set(animal: string): SpriteSet | undefined {
+    if (!(animal in ANIMAL_SHEETS)) return undefined;
+    let s = this.sets.get(animal);
+    if (!s) {
+      s = new SpriteSet(ANIMAL_SHEETS[animal]);
+      this.sets.set(animal, s);
+    }
+    return s;
   }
 
   ready(animal: string): boolean {
-    return this.loaded && animal in ANIMALS;
+    return this.set(animal)?.ready() ?? false;
   }
 
-  /** Absolute frame index for an animal in a given behaviour state. */
-  frame(animal: string, state: "walk" | "graze" | "idle" | "happy", timeMs: number, phase: number): number {
-    const a = ANIMALS[animal];
-    if (!a) return 0;
-    const seq =
-      state === "walk" ? a.walk : state === "graze" ? a.action : state === "happy" ? a.happy : a.idle;
-    const fps = state === "walk" ? 8 : state === "graze" ? 6 : state === "happy" ? 9 : 2;
-    const i = Math.floor((timeMs / 1000) * fps + phase * seq.length);
-    return seq[((i % seq.length) + seq.length) % seq.length];
-  }
-
-  /** Draw a frame (by absolute index) centred in a size x size box at (cx,cy). */
-  drawFrame(ctx: CanvasRenderingContext2D, frame: number, cx: number, cy: number, size: number): void {
-    if (!this.loaded) return;
-    const sx = (frame % COLS) * this.fw;
-    const sy = Math.floor(frame / COLS) * this.fh;
-    ctx.drawImage(this.img, sx, sy, this.fw, this.fh, cx - size / 2, cy - size / 2, size, size);
+  /** Draw the current frame for an animal/state, centred in a size box at (cx,cy). */
+  draw(
+    ctx: CanvasRenderingContext2D,
+    animal: string,
+    state: AnimalState,
+    timeMs: number,
+    phase: number,
+    cx: number,
+    cy: number,
+    size: number,
+  ): void {
+    const s = this.set(animal);
+    if (!s) return;
+    const mapped: SpriteState = state === "graze" ? "action" : state;
+    s.drawCentred(ctx, mapped, timeMs, phase, cx, cy, size);
   }
 }
 
-// Share one decoded instance across the home screen and the game.
+// Share one instance (and its decoded sheets) across the home screen and game.
 let shared: Sprites | null = null;
 export function getSprites(): Sprites {
   return (shared ??= new Sprites());
-}
-
-/** SSR-safe reduced-motion probe, shared by the renderer and home critters. */
-export function prefersReducedMotion(): boolean {
-  return typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 }

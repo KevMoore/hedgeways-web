@@ -514,14 +514,13 @@ export class Scene {
     for (const c of ordered) {
       const [px, py] = this.worldToScreen(c.x, c.y);
       const happy = this.t < c.happyUntil;
-      const frame = this.reduceMotion
-        ? this.sprites.frame(c.animal, "idle", 0, c.phase)
-        : this.sprites.frame(c.animal, happy ? "happy" : c.state, this.t, c.phase);
+      const state = this.reduceMotion ? "idle" : happy ? "happy" : c.state;
+      const tm = this.reduceMotion ? 0 : this.t;
       const jump = happy && !this.reduceMotion ? -Math.abs(Math.sin(this.t / 110 + c.phase * 6)) * size * 0.3 : 0;
       ctx.save();
       ctx.translate(px, py + jump);
       if (c.facing < 0) ctx.scale(-1, 1); // sheet faces right
-      this.sprites.drawFrame(ctx, frame, 0, 0, size);
+      this.sprites.draw(ctx, c.animal, state, tm, c.phase, 0, 0, size);
       ctx.restore();
     }
   }

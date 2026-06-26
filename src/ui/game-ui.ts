@@ -9,6 +9,7 @@ import { COLOURS, key } from "../game/types";
 import gsap from "gsap";
 import { sfx } from "../audio";
 import { mountFarmerPortrait } from "./farmer-portrait";
+import { mountCritter } from "./home-critters";
 import { getFarmerSprites } from "../render/farmer-sprites";
 import { Scene } from "../render/scene";
 import { prefersReducedMotion } from "../render/sprites";
@@ -1476,11 +1477,18 @@ export class GameUI {
         : `Sundown — ${winner.farmerName ?? winner.name} wins the farm!`;
     confetti();
     sfx.win();
+    // Hero tableau: the winner's farmer + livestock celebrating, when we have
+    // sprite art and a clear (non-tie) winner; otherwise the plain trophy.
+    const heroFid = winner.farmerId && getFarmerSprites().knows(winner.farmerId) ? winner.farmerId : "";
+    const showHero = !tie && !!heroFid;
+    const heroHtml = showHero
+      ? `<div class="victory-stage"><span class="vs-farmer" data-fid="${heroFid}"></span><span class="vs-animal" data-animal="${winner.animal}"></span></div>`
+      : `<div class="trophy">${tie ? "🤝" : "🚜"}</div>`;
     const back = document.createElement("div");
     back.className = "modal-back";
     back.innerHTML = `
       <div class="modal end">
-        <div class="trophy">${tie ? "🤝" : "🚜"}</div>
+        ${heroHtml}
         <h2>${winLine}</h2>
         ${forfeit ? `<p class="forfeit-note">Your opponent forfeited the game.</p>` : ""}
         <table>${standings
@@ -1506,6 +1514,16 @@ export class GameUI {
     // Mount farmer animations into the standings rows — winners get a happy
     // cheer cycle, others a calmer idle.
     const podiumWidgets: { dispose: () => void }[] = [];
+    if (showHero) {
+      const fHost = back.querySelector<HTMLElement>(".vs-farmer");
+      const aHost = back.querySelector<HTMLElement>(".vs-animal");
+      if (fHost) {
+        const w = mountFarmerPortrait(fHost, heroFid, { size: 116, crop: "full", state: "happy", phase: 0 });
+        if (w) podiumWidgets.push(w);
+      }
+      // animal faces left (mirrored) so it turns toward the farmer
+      if (aHost) podiumWidgets.push(mountCritter(aHost, winner.animal, { size: 92, state: "happy", facing: -1, phase: 0.5 }));
+    }
     back.querySelectorAll<HTMLElement>(".endfarmer").forEach((host) => {
       const fid = host.dataset.fid || "";
       const pos = Number(host.dataset.pos || "999");

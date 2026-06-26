@@ -10,11 +10,15 @@ interface MountOpts {
   static?: boolean;
   /** randomised time offset so multiple chips don't tick in unison */
   phase?: number;
+  /** -1 mirrors horizontally (sheets face right) so the farmer can face left */
+  facing?: 1 | -1;
 }
 
 interface MountedFarmer {
   el: HTMLCanvasElement;
   dispose: () => void;
+  setState: (s: FarmerState) => void;
+  setFacing: (f: 1 | -1) => void;
 }
 
 /**
@@ -42,32 +46,29 @@ export function mountFarmerPortrait(
   ctx.imageSmoothingEnabled = true;
   host.appendChild(canvas);
 
-  const state: FarmerState = opts.state ?? "idle";
+  let curState: FarmerState = opts.state ?? "idle";
+  let curFacing = opts.facing ?? 1;
   const crop = opts.crop ?? "full";
   const phase = opts.phase ?? Math.random();
 
   let rafId = 0;
-  let lastFrame = -1;
-  let pulseT = 0; // for idle bob
 
   const draw = (t: number) => {
-    const frame = sprites.frame(farmerId, state, t, phase);
     // small vertical bob on idle so the chip feels alive even when static
-    const bob = state === "idle" ? Math.sin(t / 700 + phase * 6.28) * size * 0.025 : 0;
-    if (frame !== lastFrame || state === "idle") {
-      ctx.clearRect(0, 0, size, size);
-      sprites.drawFrame(ctx, farmerId, frame, 0, bob, size, size, crop);
-      lastFrame = frame;
+    const bob = curState === "idle" ? Math.sin(t / 700 + phase * 6.28) * size * 0.025 : 0;
+    ctx.clearRect(0, 0, size, size);
+    ctx.save();
+    if (curFacing === -1) {
+      ctx.translate(size, 0);
+      ctx.scale(-1, 1);
     }
-    pulseT = t;
+    sprites.draw(ctx, farmerId, curState, t, phase, 0, bob, size, size, crop);
+    ctx.restore();
   };
 
   let prevReady = false;
   const loop = (t: number) => {
-    if (!prevReady && sprites.ready(farmerId)) {
-      prevReady = true;
-      lastFrame = -1; // force first draw when the sheet finishes loading
-    }
+    if (!prevReady && sprites.ready(farmerId)) prevReady = true;
     if (prevReady) draw(t);
     if (!opts.static) rafId = requestAnimationFrame(loop);
   };
@@ -88,7 +89,8 @@ export function mountFarmerPortrait(
     dispose: () => {
       cancelAnimationFrame(rafId);
       canvas.remove();
-      void pulseT;
     },
+    setState: (s) => (curState = s),
+    setFacing: (f) => (curFacing = f),
   };
 }

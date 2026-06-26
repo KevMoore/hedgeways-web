@@ -9,6 +9,7 @@ import { FARMERS, LIVESTOCK, PLAYER_KITS } from "./game/constants";
 import { NetClient, clearSession, loadSession, saveSession, type NetHandlers, type OnlineSession } from "./net/client";
 import type { OnlineKit } from "./net/protocol";
 import { mountHomeCritters } from "./ui/home-critters";
+import { mountFarmScene } from "./ui/farm-scene";
 import { mountFarmerPortrait } from "./ui/farmer-portrait";
 import { getFarmerSprites } from "./render/farmer-sprites";
 import { sfx } from "./audio";
@@ -342,6 +343,7 @@ function renderStart(): void {
   const resumable = saved && !saved.gameOver ? saved : null;
   app.innerHTML = `
     ${ambientField()}
+    <div class="farm-scene" aria-hidden="true"></div>
     <div class="hedgerow" aria-hidden="true"></div>
     <div class="start">
       <div class="logo">Hedge<span>ways</span></div>
@@ -479,6 +481,9 @@ function renderStart(): void {
   const stopLivestockCritters = mountHomeCritters([
     ...app.querySelectorAll<HTMLElement>("#livestock .critter-pic"),
   ]);
+  // living pasture behind the panel
+  const farmSceneEl = app.querySelector<HTMLElement>(".farm-scene");
+  const stopFarmScene = farmSceneEl ? mountFarmScene(farmSceneEl) : null;
 
   let previewWidget: { dispose: () => void } | null = null;
   const previewEl = app.querySelector<HTMLElement>("#preview")!;
@@ -543,6 +548,7 @@ function renderStart(): void {
   stopHome = () => {
     stopCritters?.();
     stopLivestockCritters?.();
+    stopFarmScene?.();
     previewWidget?.dispose();
     for (const w of pickerWidgets) w.dispose();
   };
