@@ -1,7 +1,8 @@
 import gsap from "gsap";
-import { COLOUR_HEX, COLOUR_HEX_DARK, HAND_SIZE, LIVESTOCK, MAX_LAY, PLAYER_KITS } from "../game/constants";
+import { COLOUR_HEX, COLOUR_HEX_DARK, FARMERS, HAND_SIZE, LIVESTOCK, MAX_LAY, PLAYER_KITS } from "../game/constants";
 import { ACRES_PER_HERD } from "../game/scoring";
 import type { Colour } from "../game/types";
+import { mountFarmerPortrait } from "./farmer-portrait";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -315,6 +316,31 @@ export function showHowTo(): void {
     ),
   );
 
+  // Meet the farmers — all eight, their look and their bot personality.
+  const farmersSec = el("section", "ht-section");
+  const fhead = el("h3", "ht-head");
+  fhead.append(el("span", "ht-emoji", "🧑‍🌾"), document.createTextNode("Meet the farmers"));
+  farmersSec.append(
+    fhead,
+    el("p", "ht-body", "Choose your farmer for their look. Each one also has a mind of its own — as an opponent, every farmer plays with a different personality."),
+  );
+  const fgrid = el("div", "ht-farmers");
+  for (const f of FARMERS) {
+    const fcard = el("div", "ht-farmer");
+    fcard.style.setProperty("--pc", f.colour);
+    const pic = el("div", "ht-farmer-pic");
+    pic.dataset.fid = f.id;
+    const meta = el("div", "ht-farmer-meta");
+    meta.append(
+      el("span", "ht-farmer-name", f.name.replace(/^Farmer /, "")),
+      el("span", "ht-farmer-blurb", f.blurb),
+    );
+    fcard.append(pic, meta);
+    fgrid.append(fcard);
+  }
+  farmersSec.append(fgrid);
+  card.append(farmersSec);
+
   const controls = el("section", "ht-section");
   const ch = el("h3", "ht-head");
   ch.append(el("span", "ht-emoji", "🎮"), document.createTextNode("Controls"));
@@ -342,12 +368,25 @@ export function showHowTo(): void {
   document.body.append(overlay);
   card.scrollTop = 0;
 
+  // mount the animated farmer portraits now that the cards are in the DOM
+  const farmerWidgets: { dispose: () => void }[] = [];
+  card.querySelectorAll<HTMLElement>(".ht-farmer-pic").forEach((host) => {
+    const w = mountFarmerPortrait(host, host.dataset.fid || "", {
+      size: 56,
+      crop: "full",
+      state: "idle",
+      phase: Math.random(),
+    });
+    if (w) farmerWidgets.push(w);
+  });
+
   const reduce = reduced();
   let closing = false;
   const dismiss = (): void => {
     if (closing) return;
     closing = true;
     const done = (): void => {
+      for (const w of farmerWidgets) w.dispose();
       overlay.remove();
       open = false;
     };

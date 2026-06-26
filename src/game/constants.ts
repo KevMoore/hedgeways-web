@@ -1,14 +1,14 @@
-import type { Colour } from "./types";
+import type { Colour, FarmerStyle } from "./types";
 
 export const HAND_SIZE = 4;
 export const MAX_LAY = 3; // tiles per turn
 
-/** Each farmer claims acres with their livestock + player colour. */
+/** Default seat kits (farmer↔animal↔colour) — fallback for saves/online that
+ * predate explicit per-seat fields, and the source for the home animal chips. */
 export interface PlayerKit {
   animal: string;
   colour: string;
-  /** Farmer character ID — picks one of the drawn farmer portraits. */
-  farmerId: "rosie" | "jack" | "molly" | "billy";
+  farmerId: string;
   farmerName: string;
 }
 export const PLAYER_KITS: PlayerKit[] = [
@@ -20,20 +20,32 @@ export const PLAYER_KITS: PlayerKit[] = [
 
 /**
  * Farmer + livestock are picked independently on the home screen. The farmer
- * carries the player's identity colour (their acres' tint + portrait); the
- * livestock is the animal stamped on those acres, its ambient call, and a small
- * scoring perk. Both are honoured straight through to the in-game Player.
+ * carries the player's identity colour (their acres' tint + portrait) and a bot
+ * "personality" (style); the livestock is the animal stamped on those acres,
+ * its ambient call, and a small scoring perk.
  */
 export interface Farmer {
-  id: PlayerKit["farmerId"];
+  id: string;
   name: string;
   colour: string;
+  /** bot move-scoring bias (see ai.ts) + a one-liner shown in the picker. */
+  style: FarmerStyle;
+  blurb: string;
 }
-export const FARMERS: Farmer[] = PLAYER_KITS.map((k) => ({
-  id: k.farmerId,
-  name: k.farmerName,
-  colour: k.colour,
-}));
+export const FARMERS: Farmer[] = [
+  { id: "rosie", name: "Farmer Rosie", colour: "#e0524d", style: "opportunist", blurb: "Opportunist — grabs whatever acres are going" },
+  { id: "jack", name: "Farmer Jack", colour: "#7b61ff", style: "guardian", blurb: "Guardian — won't gift you a near-done field" },
+  { id: "molly", name: "Farmer Molly", colour: "#1f9e8f", style: "cultivator", blurb: "Cultivator — patient, builds toward big fields" },
+  { id: "billy", name: "Farmer Billy", colour: "#e0852b", style: "minimalist", blurb: "Minimalist — terse, decisive, no waste" },
+  { id: "hazel", name: "Farmer Hazel", colour: "#c0397b", style: "tactician", blurb: "Tactician — a closer; seals the biggest field" },
+  { id: "sam", name: "Farmer Sam", colour: "#3d7e3a", style: "landgrabber", blurb: "Land-grabber — aggressive, greedy expansion" },
+  { id: "nell", name: "Farmer Nell", colour: "#2a6fb0", style: "steady", blurb: "Steady — cautious, consistent gains" },
+  { id: "gus", name: "Farmer Gus", colour: "#8a5a2b", style: "wildcard", blurb: "Wildcard — unpredictable, mixes it up" },
+];
+
+/** A farmer's bot style by id (the single source of truth for personalities). */
+export const farmerStyleFor = (farmerId?: string): FarmerStyle | undefined =>
+  FARMERS.find((f) => f.id === farmerId)?.style;
 
 /** A livestock perk fires for a small flair bonus when its move matches the kind. */
 export type LivestockPerk = "wide" | "multi" | "streak" | "steady";

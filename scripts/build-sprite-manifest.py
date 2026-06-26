@@ -14,7 +14,7 @@ from PIL import Image
 
 COLS = 5
 STATES = ["idle", "walk", "action", "happy"]
-FARMERS = ["jack", "molly", "rosie", "billy"]
+FARMERS = ["jack", "molly", "rosie", "billy", "hazel", "sam", "nell", "gus"]
 ANIMALS = ["cow", "chicken", "pig", "sheep"]
 EMOJI = {"cow": "🐮", "chicken": "🐓", "pig": "🐷", "sheep": "🐑"}
 

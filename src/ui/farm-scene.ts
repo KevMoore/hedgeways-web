@@ -14,6 +14,7 @@ import { mountCritter, type CritterHandle } from "./home-critters";
 import { mountFarmerPortrait } from "./farmer-portrait";
 import { prefersReducedMotion } from "../render/sprites";
 import { getFarmerSprites } from "../render/farmer-sprites";
+import { FARMERS } from "../game/constants";
 
 interface Phase {
   state: string;
@@ -146,13 +147,16 @@ export function mountFarmScene(host: HTMLElement): () => void {
   if (!narrow) addDeco(near, 87, 84, fenceSvg("P"), "fs-fence");
 
   type Def = { layer: "far" | "near"; animal?: string; farmer?: string; size: number; mobile?: boolean };
+  // a random four of the eight farmers each load — so everyone turns up across
+  // visits without crowding the band
+  const fids = FARMERS.map((f) => f.id).sort(() => Math.random() - 0.5);
   const cast: Def[] = [
-    { layer: "near", farmer: "rosie", size: 66, mobile: true },
-    { layer: "near", farmer: "molly", size: 62, mobile: true },
+    { layer: "near", farmer: fids[0], size: 66, mobile: true },
+    { layer: "near", farmer: fids[1], size: 62, mobile: true },
     { layer: "near", animal: "🐮", size: 60, mobile: true },
     { layer: "near", animal: "🐷", size: 54 },
-    { layer: "far", farmer: "jack", size: 46, mobile: true },
-    { layer: "far", farmer: "billy", size: 44, mobile: true },
+    { layer: "far", farmer: fids[2], size: 46, mobile: true },
+    { layer: "far", farmer: fids[3], size: 44, mobile: true },
     { layer: "far", animal: "🐑", size: 40, mobile: true },
     { layer: "far", animal: "🐓", size: 34 },
   ];

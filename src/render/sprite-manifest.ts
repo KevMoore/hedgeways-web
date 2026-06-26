@@ -30,6 +30,30 @@ export const FARMER_SHEETS: Record<string, CharAnims> = {
     action: { file: "farmers/billy/action.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 10, y: 1, w: 109, h: 126 } },
     happy: { file: "farmers/billy/happy.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 10, y: 1, w: 109, h: 126 } },
   },
+  hazel: {
+    idle: { file: "farmers/hazel/idle.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 8, y: 0, w: 113, h: 126 } },
+    walk: { file: "farmers/hazel/walk.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 8, y: 0, w: 113, h: 126 } },
+    action: { file: "farmers/hazel/action.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 8, y: 0, w: 113, h: 126 } },
+    happy: { file: "farmers/hazel/happy.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 8, y: 0, w: 113, h: 126 } },
+  },
+  sam: {
+    idle: { file: "farmers/sam/idle.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 18, y: 0, w: 102, h: 127 } },
+    walk: { file: "farmers/sam/walk.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 18, y: 0, w: 102, h: 127 } },
+    action: { file: "farmers/sam/action.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 18, y: 0, w: 102, h: 127 } },
+    happy: { file: "farmers/sam/happy.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 18, y: 0, w: 102, h: 127 } },
+  },
+  nell: {
+    idle: { file: "farmers/nell/idle.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 8, y: 0, w: 111, h: 127 } },
+    walk: { file: "farmers/nell/walk.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 8, y: 0, w: 111, h: 127 } },
+    action: { file: "farmers/nell/action.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 8, y: 0, w: 111, h: 127 } },
+    happy: { file: "farmers/nell/happy.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 8, y: 0, w: 111, h: 127 } },
+  },
+  gus: {
+    idle: { file: "farmers/gus/idle.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 16, y: 0, w: 112, h: 128 } },
+    walk: { file: "farmers/gus/walk.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 16, y: 0, w: 112, h: 128 } },
+    action: { file: "farmers/gus/action.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 16, y: 0, w: 112, h: 128 } },
+    happy: { file: "farmers/gus/happy.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 16, y: 0, w: 112, h: 128 } },
+  },
 };
 
 export const ANIMAL_SHEETS: Record<string, CharAnims> = {

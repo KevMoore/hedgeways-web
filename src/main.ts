@@ -497,6 +497,7 @@ function renderStart(): void {
       <span class="pv-farmer"></span>
       <div class="pv-text">
         <span class="pv-name">${f.name} <span class="pv-with">+ ${l.animal} ${l.name}</span></span>
+        <span class="pv-style">${f.blurb}</span>
         <span class="pv-perk"><b>${l.perkName}</b> — ${l.perkBlurb}</span>
       </div>`;
     const host = previewEl.querySelector<HTMLElement>(".pv-farmer");
@@ -521,7 +522,11 @@ function renderStart(): void {
     // board stays readable. Farmers and livestock are independent picks now.
     const sel = slots.slice(0, count);
     const firstHuman = sel.findIndex((s) => s.type === "human");
-    const farmerPool = [0, 1, 2, 3].filter((i) => firstHuman < 0 || i !== farmerIdx);
+    // bots draw distinct farmers from the full roster (shuffled, so the mix of
+    // personalities varies game to game); livestock pool stays the 4 animals
+    const farmerPool = FARMERS.map((_, i) => i)
+      .filter((i) => firstHuman < 0 || i !== farmerIdx)
+      .sort(() => Math.random() - 0.5);
     const livestockPool = [0, 1, 2, 3].filter((i) => firstHuman < 0 || i !== livestockIdx);
     let fp = 0;
     let lp = 0;

@@ -4,6 +4,7 @@ import {
   HAND_SIZE,
   LIVESTOCK,
   PLAYER_KITS,
+  farmerStyleFor,
   livestockPerk,
   livestockPerkFires,
   type LivestockPerk,
@@ -12,7 +13,7 @@ import { applyMoveToBoard, generateMoves } from "./moves";
 import { validateMove } from "./placement";
 import { findEnclosed, pastureBonus } from "./scoring";
 import { makeRng, shuffle } from "./rng";
-import type { Cell, Difficulty, Move, Player, Tile } from "./types";
+import type { Cell, Difficulty, FarmerStyle, Move, Player, Tile } from "./types";
 
 export interface GameSnapshot {
   config: GameConfig;
@@ -36,6 +37,7 @@ export interface PlayerConfig {
   animal?: string;
   farmerId?: string;
   farmerName?: string;
+  style?: FarmerStyle;
 }
 
 export interface GameConfig {
@@ -197,6 +199,7 @@ export class Game {
       animal: p.animal ?? PLAYER_KITS[id % PLAYER_KITS.length].animal,
       farmerId: p.farmerId ?? PLAYER_KITS[id % PLAYER_KITS.length].farmerId,
       farmerName: p.farmerName ?? PLAYER_KITS[id % PLAYER_KITS.length].farmerName,
+      style: p.style ?? farmerStyleFor(p.farmerId ?? PLAYER_KITS[id % PLAYER_KITS.length].farmerId),
     }));
   }
 

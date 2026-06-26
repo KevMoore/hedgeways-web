@@ -4,7 +4,7 @@ import { HAND_SIZE } from "./constants";
 import type { Game } from "./game";
 import { applyMoveToBoard, generateMoves } from "./moves";
 import { findEnclosed } from "./scoring";
-import type { Difficulty, Move, Tile } from "./types";
+import type { Difficulty, FarmerStyle, Move, Tile } from "./types";
 import { key } from "./types";
 
 type Rng = () => number;
@@ -55,25 +55,88 @@ function pocketStats(board: Board): { pens: number; threats: number } {
   return { pens, threats };
 }
 
-/** Heuristic value of a candidate move from the mover's perspective. */
-function heuristic(board: Board, move: Move, diff: Difficulty): { v: number; gain: number; after: Board } {
-  const after = board.clone();
-  const gain = applyAndScore(after, move);
-  if (diff === "easy") return { v: gain, gain, after };
-  const { pens, threats } = pocketStats(after);
-  if (diff === "medium") return { v: gain - 0.4 * threats + 0.1 * pens, gain, after };
-  // hard/expert: build more aggressively toward closures, lay more tiles, avoid gifts
-  return { v: gain - 0.6 * threats + 0.15 * pens + 0.05 * move.tiles.length, gain, after };
+/**
+ * Move-scoring weights. Difficulty sets the baseline (raw strength); a farmer's
+ * STYLE then re-weights the terms to give it a personality. Default (no style)
+ * reproduces the original per-difficulty formula exactly.
+ */
+interface Weights {
+  gain: number; // acres sealed this move
+  threat: number; // penalty per near-done field left for a rival (closer-takes-all)
+  pen: number; // reward per half-built pocket (building toward enclosures)
+  tile: number; // reward per tile laid (aggression / tempo)
+  jitter: number; // tie-break noise
+}
+const WEIGHTS_BASE: Record<Difficulty, Weights> = {
+  easy: { gain: 1, threat: 0, pen: 0, tile: 0, jitter: 1e-3 },
+  medium: { gain: 1, threat: 0.4, pen: 0.1, tile: 0, jitter: 1e-3 },
+  hard: { gain: 1, threat: 0.6, pen: 0.15, tile: 0.05, jitter: 1e-3 },
+  expert: { gain: 1, threat: 0.6, pen: 0.15, tile: 0.05, jitter: 1e-3 },
+};
+
+interface StyleCfg {
+  threat?: number; // absolute coefficients (these are the levers that actually
+  pen?: number; //    flip move choices — scaling `gain` is argmax-invariant)
+  tile?: number;
+  jitter?: number;
+  rand?: number; // chance of an off-the-cuff random legal move
+}
+/**
+ * Per-personality biases. These OVERRIDE the difficulty baseline's threat/pen/
+ * tile coefficients (when present) so each farmer makes visibly different
+ * decisions. Magnitudes are sized to actually swing the argmax against raw
+ * acre-gain, not just break ties. Tuned via the self-play probe to stay
+ * roughly competitive (no style is a pushover).
+ */
+const STYLES: Record<FarmerStyle, StyleCfg> = {
+  opportunist: {}, // baseline — take the best acres on offer
+  guardian: { threat: 1.8, pen: 0.15 }, // defensive — won't gift a near-done field
+  cultivator: { pen: 0.6, tile: 0.35, threat: 0.3 }, // patient builder, lays more
+  minimalist: { tile: -0.6, pen: 0.04, jitter: 2e-4 }, // terse, decisive, few tiles
+  tactician: { pen: -0.15, threat: 0.8, tile: -0.05 }, // closer — won't faff half-building
+  landgrabber: { tile: 0.5, pen: 0.3, threat: 0.05 }, // greedy expansion, ignores risk
+  steady: { threat: 1.2, pen: 0.18, tile: -0.1, jitter: 2e-4 }, // cautious, conservative, low variance
+  wildcard: { jitter: 0.8, rand: 0.1 }, // unpredictable
+};
+
+interface ResolvedWeights extends Weights {
+  rand: number;
+}
+function resolveWeights(diff: Difficulty, style?: FarmerStyle): ResolvedWeights {
+  const b = WEIGHTS_BASE[diff];
+  const s = style ? STYLES[style] : {};
+  // easy stays gain-only (weak) regardless of style; medium+ takes the overrides
+  if (diff === "easy") return { ...b, rand: s.rand ?? 0 };
+  return {
+    gain: b.gain,
+    threat: s.threat ?? b.threat,
+    pen: s.pen ?? b.pen,
+    tile: s.tile ?? b.tile,
+    jitter: s.jitter ?? b.jitter,
+    rand: s.rand ?? 0,
+  };
 }
 
-function pickGreedy(board: Board, hand: Tile[], diff: Difficulty, rng: Rng): Move | null {
+/** Heuristic value of a candidate move from the mover's perspective. */
+function heuristic(board: Board, move: Move, w: Weights): { v: number; gain: number; after: Board } {
+  const after = board.clone();
+  const gain = applyAndScore(after, move);
+  // skip the pocket scan when no term needs it (cheap path for easy)
+  if (w.threat === 0 && w.pen === 0 && w.tile === 0) return { v: gain * w.gain, gain, after };
+  const { pens, threats } = pocketStats(after);
+  return { v: gain * w.gain - w.threat * threats + w.pen * pens + w.tile * move.tiles.length, gain, after };
+}
+
+function pickGreedy(board: Board, hand: Tile[], diff: Difficulty, style: FarmerStyle | undefined, rng: Rng): Move | null {
   const moves = generateMoves(board, hand, { limit: BREADTH[diff] });
   if (moves.length === 0) return null;
+  const w = resolveWeights(diff, style);
   if (diff === "easy" && rng() < 0.5) return moves[Math.floor(rng() * moves.length)];
+  if (w.rand > 0 && rng() < w.rand) return moves[Math.floor(rng() * moves.length)];
   let best = moves[0];
   let bestV = -Infinity;
   for (const m of moves) {
-    const v = heuristic(board, m, diff).v + rng() * 1e-3;
+    const v = heuristic(board, m, w).v + rng() * w.jitter;
     if (v > bestV) {
       bestV = v;
       best = m;
@@ -191,14 +254,15 @@ const clock = (): number =>
 
 const ROOT_K = 12; // MCTS concentrates on the heuristic's best dozen candidates
 
-function expertMove(game: Game, me: number, rng: Rng, iterations: number, maxMs: number): Move | null {
+function expertMove(game: Game, me: number, rng: Rng, iterations: number, maxMs: number, style?: FarmerStyle): Move | null {
   let root = generateMoves(game.board, game.players[me].hand, { limit: BREADTH.expert });
   if (root.length === 0) return null;
   if (root.length === 1) return root[0];
 
-  // Pre-rank by the strong heuristic and keep the top-K so each surviving arm
-  // gets enough rollouts to matter (otherwise the search is near-random).
-  let scored = root.map((m) => ({ m, h: heuristic(game.board, m, "hard").v }));
+  // Pre-rank by the strong heuristic (with the farmer's personality) and keep
+  // the top-K so each surviving arm gets enough rollouts to matter.
+  const w = resolveWeights("expert", style);
+  let scored = root.map((m) => ({ m, h: heuristic(game.board, m, w).v }));
   scored.sort((a, b) => b.h - a.h);
   if (scored.length > ROOT_K) scored = scored.slice(0, ROOT_K);
   root = scored.map((s) => s.m);
@@ -270,11 +334,12 @@ export interface AiOptions {
 export function chooseAiMove(game: Game, opts: AiOptions = {}): Move | null {
   const rng = opts.rng ?? Math.random;
   const player = game.currentPlayer;
+  const style = player.style;
   if (player.difficulty === "expert") {
     // first move on an empty board: the search tree is huge and rollouts are
     // mostly noise — fall back to the strong heuristic.
-    if (game.board.size === 0) return pickGreedy(game.board, player.hand, "hard", rng);
-    return expertMove(game, game.current, rng, opts.iterations ?? 120, opts.maxMs ?? 300);
+    if (game.board.size === 0) return pickGreedy(game.board, player.hand, "hard", style, rng);
+    return expertMove(game, game.current, rng, opts.iterations ?? 120, opts.maxMs ?? 300, style);
   }
-  return pickGreedy(game.board, player.hand, player.difficulty, rng);
+  return pickGreedy(game.board, player.hand, player.difficulty, style, rng);
 }

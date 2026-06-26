@@ -35,6 +35,20 @@ export interface Move {
 
 export type Difficulty = "easy" | "medium" | "hard" | "expert";
 
+/**
+ * A farmer's bot "personality" — biases the AI's move scoring (preference),
+ * layered on top of difficulty (which sets raw strength). See ai.ts STYLES.
+ */
+export type FarmerStyle =
+  | "opportunist"
+  | "guardian"
+  | "cultivator"
+  | "minimalist"
+  | "tactician"
+  | "landgrabber"
+  | "steady"
+  | "wildcard";
+
 export interface Player {
   id: number;
   name: string;
@@ -47,8 +61,9 @@ export interface Player {
   streak: number; // consecutive own turns that sealed ≥1 acre
   colour: string; // player colour (fills their claimed acres)
   animal: string; // livestock emoji stamped on their acres
-  farmerId?: string; // matches a PLAYER_KITS farmerId — drives the farmer avatar
+  farmerId?: string; // matches a FARMERS id — drives the farmer avatar
   farmerName?: string; // friendly farmer name (overrides the generic "Bot N" / "You" in chips)
+  style?: FarmerStyle; // bot personality (move-scoring bias); undefined = baseline
 }
 
 export const key = (x: number, y: number): string => `${x},${y}`;
