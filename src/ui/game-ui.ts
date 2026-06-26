@@ -136,7 +136,7 @@ export class GameUI {
     // own turn their chosen zoom is respected.
     this.scene.setAutoFrame(p.isBot);
     if (p.isBot) {
-      this.setStatus(`${p.animal} ${p.name} ${this.planningLine(p.id)}`);
+      this.setBotStatus(`${p.animal} ${p.name} ${this.planningLine(p.id)}`, true);
       this.renderHand(true);
       this.updateButtons();
       this.setBotThinking(true); // amber glow on the active chip while it ponders
@@ -208,8 +208,8 @@ export class GameUI {
    *  jitter keeps successive turns from feeling metronomic. */
   private botThinkBudget(difficulty: Difficulty): number {
     if (this.reduceMotion) return 200;
-    const base = { easy: 380, medium: 650, hard: 850, expert: 1100 }[difficulty] ?? 650;
-    return Math.round(base * (0.9 + Math.random() * 0.2)); // ±10%
+    const base = { easy: 650, medium: 1000, hard: 1300, expert: 1650 }[difficulty] ?? 1000;
+    return Math.round(base * (0.8 + Math.random() * 0.4)); // ±20% organic jitter
   }
 
   /** Cancellable delay used between bot placement beats. Parks the handle in
@@ -236,19 +236,19 @@ export class GameUI {
   private async botLayMoveAnimated(move: Move, actor: { name: string; animal: string; colour?: string }): Promise<void> {
     this.busy = true;
     const rm = this.reduceMotion;
-    const THINK_MS = rm ? 120 : 540; // visible "thinking…" beat before each extra hedge
-    const SETTLE_MS = rm ? 90 : 300; // brief pause after a hedge lands, before the next ponder
+    const THINK_MS = rm ? 120 : 1050; // visible "thinking…" beat before each extra hedge
+    const SETTLE_MS = rm ? 90 : 420; // brief pause after a hedge lands, before the next ponder
     const who = `${actor.animal} ${actor.name}`;
     for (let i = 0; i < move.tiles.length; i++) {
       if (!this.alive) return;
       if (this.game.currentPlayer !== actor) return; // turn changed under us
       // Deliberate before each subsequent hedge (the first is covered by the
-      // pre-lay planning beat) — amber "thinking…" glow + status, so the bot
-      // reads as mulling each placement instead of dumping its whole hand at once.
+      // pre-lay planning beat) — amber "thinking…" glow + animated status, so the
+      // bot reads as mulling each placement instead of dumping its whole hand.
       if (i > 0) {
         this.setBotThinking(true);
-        this.setStatus(`${who} ${this.botThinkingLine(i)}`);
-        await this.botDelay(Math.round(THINK_MS * (0.75 + Math.random() * 0.5)));
+        this.setBotStatus(`${who} ${this.botThinkingLine(i)}`, true);
+        await this.botDelay(Math.round(THINK_MS * (0.7 + Math.random() * 0.6))); // wide jitter
         if (!this.alive || this.game.currentPlayer !== actor) return;
       }
       // Lay the hedge.
@@ -258,7 +258,7 @@ export class GameUI {
       this.pending.push({ tileId: t.tileId, cells });
       this.pendingOri.push(0); // orientation doesn't matter for the visualisation
       sfx.place();
-      this.setStatus(`${who} plants a hedge 🌿`);
+      this.setBotStatus(`${who} plants a hedge 🌿`, false);
       this.syncScene();
       // Reward connections the same way a human placement does — a ring flash +
       // chime on cells that just clicked into a matching-colour neighbour.
@@ -1035,6 +1035,26 @@ export class GameUI {
 
   private setStatus(msg: string): void {
     this.root.querySelector(".status")!.textContent = msg;
+  }
+
+  /** Status line during a bot turn, with life: a pop-in entrance each beat, plus
+   *  animated "…" dots while it's thinking — so the deliberation reads as a live
+   *  callout rather than static text snapping in. */
+  private setBotStatus(msg: string, thinking: boolean): void {
+    const el = this.root.querySelector(".status") as HTMLElement;
+    if (thinking && !this.reduceMotion) {
+      // swap the trailing ellipsis for three independently-bouncing dots
+      const base = msg.replace(/…\s*$/, "");
+      el.innerHTML = `${base}<span class="think-dots"><i>.</i><i>.</i><i>.</i></span>`;
+    } else {
+      el.textContent = msg;
+    }
+    if (this.reduceMotion) return;
+    gsap.fromTo(
+      el,
+      { y: 9, scale: 0.93, opacity: 0.3 },
+      { y: 0, scale: 1, opacity: 1, duration: 0.42, ease: "back.out(2.4)", clearProps: "opacity,transform" },
+    );
   }
 
   private clearTurnState(): void {
