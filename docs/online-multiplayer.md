@@ -30,8 +30,12 @@ For a deployed server, set `VITE_WS_URL=wss://<host>` at build time; the client 
 ### Live server (Render)
 
 - **URL:** `wss://hedgeways-server.onrender.com` · health: `https://hedgeways-server.onrender.com/`
-- **Service:** `hedgeways-server` (`srv-d8v2jgg0697c73f4hp6g`), Render **free**, **Frankfurt**, tracks
-  `main`, auto-deploy on push. Dashboard: https://dashboard.render.com/web/srv-d8v2jgg0697c73f4hp6g
+- **Service:** `hedgeways-server` (`srv-d8v2jgg0697c73f4hp6g`), Render **free**, **Frankfurt**.
+  Dashboard: https://dashboard.render.com/web/srv-d8v2jgg0697c73f4hp6g
+- **Deploys are MANUAL** (the service is connected via a public-repo URL, so Render offers no
+  auto-deploy/webhook). After pushing server changes to `main`: dashboard → **Manual Deploy →
+  Deploy latest commit**. Verify live with `WS_URL=wss://hedgeways-server.onrender.com pnpm tsx
+  scripts/ghost-smoke.ts` (and `online-smoke.ts`).
 - **Origin allowlist (CORS-equivalent):** localhost (any port), `*.onrender.com`, `hedgeways.surge.sh`.
   Add more via the `ALLOWED_ORIGINS` env var (comma-separated).
 - **Test local client → live server:** `.env.local` holds `VITE_WS_URL=wss://hedgeways-server.onrender.com`

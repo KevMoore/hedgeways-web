@@ -1593,23 +1593,30 @@ export class Scene {
         this.drawHedge(c.x, c.y, c.colour, ghostAlpha, !this.ghost.valid, ghostScale, mask);
       }
     }
-    // opponent presence (online) — colourless tile-shaped shadows where the
-    // opponent is tentatively placing. Positions only; never their colours.
+    // opponent presence (online) — SOLID colourless tile silhouettes where the
+    // opponent is tentatively placing. Reads as a real hedge tile (so a 1x3 lay
+    // shows as one bar) but in a neutral tone: positions only, never colours.
     if (this.opponentGhost.length) {
-      const op = (Math.sin(now / 300) + 1) / 2; // gentle ~0.5Hz breathe
+      const op = (Math.sin(now / 320) + 1) / 2; // gentle ~0.5Hz breathe
       const s = this.scale;
-      const pad = s * 0.1;
+      const gset = new Set(this.opponentGhost.map(([x, y]) => key(x, y)));
+      const has = (x: number, y: number) => gset.has(key(x, y));
+      const edge = Math.max(1.5, s * 0.07);
       ctx.save();
-      ctx.lineWidth = Math.max(1, s * 0.035);
-      ctx.setLineDash([s * 0.16, s * 0.12]);
       for (const [x, y] of this.opponentGhost) {
         const [px, py] = this.worldToScreen(x, y);
-        ctx.fillStyle = `rgba(58,70,82,${0.2 + op * 0.16})`;
-        ctx.strokeStyle = `rgba(255,255,255,${0.32 + op * 0.22})`;
-        ctx.beginPath();
-        ctx.roundRect(px + pad, py + pad, s - pad * 2, s - pad * 2, s * 0.16);
-        ctx.fill();
-        ctx.stroke();
+        // solid neutral panel — fills the whole cell so adjacent cells merge
+        ctx.fillStyle = `rgba(72,86,76,${0.52 + op * 0.16})`;
+        ctx.fillRect(px, py, s, s);
+        // darker rim on OUTWARD edges only → the run reads as one continuous tile
+        ctx.fillStyle = `rgba(26,36,28,${0.5 + op * 0.22})`;
+        if (!has(x, y - 1)) ctx.fillRect(px, py, s, edge);
+        if (!has(x, y + 1)) ctx.fillRect(px, py + s - edge, s, edge);
+        if (!has(x - 1, y)) ctx.fillRect(px, py, edge, s);
+        if (!has(x + 1, y)) ctx.fillRect(px + s - edge, py, edge, s);
+        // soft top sheen so it reads as a raised tile rather than a flat hole
+        ctx.fillStyle = `rgba(255,255,255,${0.06 + op * 0.06})`;
+        ctx.fillRect(px + edge, py + edge, s - edge * 2, Math.max(1, s * 0.12));
       }
       ctx.restore();
     }

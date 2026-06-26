@@ -13,7 +13,9 @@ export default defineConfig({
   reporter: [["list"]],
   use: { baseURL: BASE, trace: "retain-on-failure" },
   webServer: {
-    command: `pnpm exec vite --port ${PORT} --strictPort`,
+    // Pin the e2e client to a LOCAL authority (the online spec spawns one on
+    // :8787), overriding any .env.local that points dev at the live server.
+    command: `VITE_WS_URL=ws://localhost:8787 pnpm exec vite --port ${PORT} --strictPort`,
     url: BASE,
     reuseExistingServer: true,
     timeout: 60000,

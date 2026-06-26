@@ -208,7 +208,7 @@ function connectCreate(kit: OnlineKit): void {
   reconnecting = false;
   net = new NetClient(makeNetHandlers());
   clearOverlays();
-  overlay(`<h2>Connecting…</h2><p class="ov-error">Reaching the game server…</p>`);
+  overlay(`<h2>Connecting…</h2><p class="ov-error">Waking the game server — this can take up to a minute the first time.</p>`);
   net.connect(() => net?.create(kit));
 }
 
@@ -218,7 +218,7 @@ function connectJoin(code: string, kit: OnlineKit): void {
   reconnecting = false;
   net = new NetClient(makeNetHandlers());
   clearOverlays();
-  overlay(`<h2>Joining ${code}…</h2><p class="ov-error">Reaching the game server…</p>`);
+  overlay(`<h2>Joining ${code}…</h2><p class="ov-error">Waking the game server — this can take up to a minute the first time.</p>`);
   net.connect(() => net?.join(code, kit));
 }
 

@@ -314,7 +314,8 @@ export class GameUI {
         return;
       }
       const s = Math.max(0, Math.ceil((this.turnDeadline - Date.now()) / 1000));
-      statusEl.innerHTML = `${base} <b class="clk${s <= 10 ? " low" : ""}">${s}s</b>`;
+      const mmss = `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+      statusEl.innerHTML = `${base} <b class="clk${s <= 10 ? " low" : ""}">${mmss}</b>`;
     };
     tick();
     this.clockTimer = window.setInterval(tick, 500);
