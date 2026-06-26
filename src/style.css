@@ -660,12 +660,117 @@ body {
 .pbonus i {
   font-style: normal;
 }
+/* the board fills a positioned stage so the turn banner can overlay its top
+   (just below the score header) without shifting the canvas layout */
+.stage {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+}
 .board {
   flex: 1 1 0;
   min-height: 0; /* allow the canvas flex item to shrink below its pixel-buffer height */
   width: 100%;
   display: block;
   touch-action: none;
+}
+
+/* ---------- bot turn banner (just below the score header) ---------- */
+.turn-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 92%;
+  padding: 8px 16px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: #fff;
+  font-weight: 800;
+  /* dark pill so white text stays legible on ANY farmer colour; the accent
+     lives in the border + glow so it still reads as "this player's turn" */
+  background: linear-gradient(180deg, rgba(22, 38, 26, 0.94), rgba(14, 24, 17, 0.94));
+  border: 2.5px solid var(--accent, #6cc24a);
+  box-shadow:
+    0 10px 24px rgba(10, 20, 14, 0.45),
+    0 0 18px color-mix(in srgb, var(--accent, #6cc24a) 60%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--accent, #6cc24a) 20%, transparent);
+}
+.turn-banner[hidden] {
+  display: none;
+}
+/* radial glow burst behind the banner, tinted to the active farmer's colour */
+.turn-banner .tb-glow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 150%;
+  height: 320%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, var(--accent, #6cc24a), transparent 72%);
+  filter: blur(12px);
+  opacity: 0;
+  z-index: -1;
+  animation: tb-glow 0.9s ease-out both;
+}
+@keyframes tb-glow {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  30% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+}
+.turn-banner .tb-who {
+  font-size: clamp(16px, 4.8vw, 21px);
+  font-weight: 900;
+  letter-spacing: 0.3px;
+  /* a coloured halo so the name pops in the active farmer's colour */
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent, #6cc24a) 85%, transparent), 0 2px 0 rgba(0, 0, 0, 0.4);
+}
+.turn-banner .tb-act {
+  font-size: clamp(13px, 3.8vw, 16px);
+  font-weight: 700;
+  color: #eaf6e2;
+  opacity: 0.95;
+}
+/* a gentle breathing pulse while the bot is deliberating */
+.turn-banner.thinking {
+  animation: tb-breathe 1.6s ease-in-out infinite;
+}
+@keyframes tb-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 10px 24px rgba(10, 20, 14, 0.45),
+      0 0 16px color-mix(in srgb, var(--accent, #6cc24a) 55%, transparent),
+      0 0 0 4px color-mix(in srgb, var(--accent, #6cc24a) 22%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 10px 24px rgba(10, 20, 14, 0.45),
+      0 0 28px color-mix(in srgb, var(--accent, #6cc24a) 80%, transparent),
+      0 0 0 10px color-mix(in srgb, var(--accent, #6cc24a) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-banner .tb-glow {
+    animation: none;
+  }
+  .turn-banner.thinking {
+    animation: none;
+  }
 }
 .controls {
   flex: 0 0 auto;

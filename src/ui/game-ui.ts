@@ -136,7 +136,8 @@ export class GameUI {
     // own turn their chosen zoom is respected.
     this.scene.setAutoFrame(p.isBot);
     if (p.isBot) {
-      this.setBotStatus(`${p.animal} ${p.name} ${this.planningLine(p.id)}`, true);
+      this.setStatus(""); // bot messaging lives in the flashy banner, not the footer
+      this.showBotBanner(`${p.animal} ${p.name}`, this.planningLine(p.id), true, p.colour);
       this.renderHand(true);
       this.updateButtons();
       this.setBotThinking(true); // amber glow on the active chip while it ponders
@@ -204,12 +205,21 @@ export class GameUI {
   }
 
   /** Felt "thinking" budget (ms) from search-start to the first hedge landing,
-   *  by difficulty — easy is impulsive, expert deliberates. A little organic
-   *  jitter keeps successive turns from feeling metronomic. */
+   *  by difficulty — easy is impulsive, expert deliberates. */
   private botThinkBudget(difficulty: Difficulty): number {
     if (this.reduceMotion) return 200;
-    const base = { easy: 650, medium: 1000, hard: 1300, expert: 1650 }[difficulty] ?? 1000;
-    return Math.round(base * (0.8 + Math.random() * 0.4)); // ±20% organic jitter
+    const base = { easy: 1100, medium: 1700, hard: 2200, expert: 2800 }[difficulty] ?? 1700;
+    return this.ponderMs(base);
+  }
+
+  /** Humanise a deliberation pause: wide jitter around `base`, plus an occasional
+   *  longer "deep think" — like a person who usually plays briskly but now and
+   *  then stops to weigh a tricky spot. Bounded well short of a real 30s ponder. */
+  private ponderMs(base: number): number {
+    if (this.reduceMotion) return Math.min(200, base);
+    let ms = base * (0.6 + Math.random() * 0.9); // ~0.6×–1.5× — very un-metronomic
+    if (Math.random() < 0.25) ms += 1000 + Math.random() * 2600; // deep think (~1–3.6s extra)
+    return Math.round(ms);
   }
 
   /** Cancellable delay used between bot placement beats. Parks the handle in
@@ -236,19 +246,20 @@ export class GameUI {
   private async botLayMoveAnimated(move: Move, actor: { name: string; animal: string; colour?: string }): Promise<void> {
     this.busy = true;
     const rm = this.reduceMotion;
-    const THINK_MS = rm ? 120 : 1050; // visible "thinking…" beat before each extra hedge
-    const SETTLE_MS = rm ? 90 : 420; // brief pause after a hedge lands, before the next ponder
+    const THINK_MS = rm ? 120 : 1400; // base "thinking…" beat before each extra hedge (humanised)
+    const SETTLE_MS = rm ? 90 : 480; // brief pause after a hedge lands, before the next ponder
     const who = `${actor.animal} ${actor.name}`;
+    const colour = actor.colour ?? "#6cc24a";
     for (let i = 0; i < move.tiles.length; i++) {
       if (!this.alive) return;
       if (this.game.currentPlayer !== actor) return; // turn changed under us
       // Deliberate before each subsequent hedge (the first is covered by the
-      // pre-lay planning beat) — amber "thinking…" glow + animated status, so the
+      // pre-lay planning beat) — amber "thinking…" glow + flashy banner, so the
       // bot reads as mulling each placement instead of dumping its whole hand.
       if (i > 0) {
         this.setBotThinking(true);
-        this.setBotStatus(`${who} ${this.botThinkingLine(i)}`, true);
-        await this.botDelay(Math.round(THINK_MS * (0.7 + Math.random() * 0.6))); // wide jitter
+        this.showBotBanner(who, this.botThinkingLine(i), true, colour);
+        await this.botDelay(this.ponderMs(THINK_MS)); // wide jitter + occasional deep think
         if (!this.alive || this.game.currentPlayer !== actor) return;
       }
       // Lay the hedge.
@@ -258,7 +269,7 @@ export class GameUI {
       this.pending.push({ tileId: t.tileId, cells });
       this.pendingOri.push(0); // orientation doesn't matter for the visualisation
       sfx.place();
-      this.setBotStatus(`${who} plants a hedge 🌿`, false);
+      this.showBotBanner(who, "plants a hedge 🌿", false, colour);
       this.syncScene();
       // Reward connections the same way a human placement does — a ring flash +
       // chime on cells that just clicked into a matching-colour neighbour.
@@ -1037,27 +1048,40 @@ export class GameUI {
     this.root.querySelector(".status")!.textContent = msg;
   }
 
-  /** Status line during a bot turn, with life: a pop-in entrance each beat, plus
-   *  animated "…" dots while it's thinking — so the deliberation reads as a live
-   *  callout rather than static text snapping in. */
-  private setBotStatus(msg: string, thinking: boolean): void {
-    const el = this.root.querySelector(".status") as HTMLElement;
-    if (thinking && !this.reduceMotion) {
-      // swap the trailing ellipsis for three independently-bouncing dots
-      const base = msg.replace(/…\s*$/, "");
-      el.innerHTML = `${base}<span class="think-dots"><i>.</i><i>.</i><i>.</i></span>`;
-    } else {
-      el.textContent = msg;
-    }
+  /** Flashy "whose turn / what they're doing" banner pinned just below the score
+   *  header (SproutWord-style): the bot's animal + name, an action line, a radial
+   *  glow tinted to the player's colour, and animated "…" dots while thinking.
+   *  Re-springs in on every beat so the deliberation reads as a live callout. */
+  private showBotBanner(who: string, action: string, thinking: boolean, colour: string): void {
+    const el = this.root.querySelector(".turn-banner") as HTMLElement | null;
+    if (!el) return;
+    el.hidden = false;
+    el.style.setProperty("--accent", colour || "#6cc24a");
+    el.classList.toggle("thinking", thinking);
+    const base = action.replace(/…\s*$/, "");
+    const dots = thinking && !this.reduceMotion ? `<span class="think-dots"><i>.</i><i>.</i><i>.</i></span>` : thinking ? "…" : "";
+    el.innerHTML =
+      `<span class="tb-glow"></span>` +
+      `<span class="tb-who">${who}</span>` +
+      `<span class="tb-act">${base}${dots}</span>`;
     if (this.reduceMotion) return;
     gsap.fromTo(
       el,
-      { y: 9, scale: 0.93, opacity: 0.3 },
-      { y: 0, scale: 1, opacity: 1, duration: 0.42, ease: "back.out(2.4)", clearProps: "opacity,transform" },
+      { y: -16, scale: 0.7, opacity: 0, rotate: -2 },
+      { y: 0, scale: 1, opacity: 1, rotate: 0, duration: 0.5, ease: "back.out(2.6)", clearProps: "opacity,transform" },
     );
   }
 
+  private hideBotBanner(): void {
+    const el = this.root.querySelector(".turn-banner") as HTMLElement | null;
+    if (!el) return;
+    el.hidden = true;
+    el.innerHTML = "";
+    el.classList.remove("thinking");
+  }
+
   private clearTurnState(): void {
+    this.hideBotBanner(); // a bot turn's banner never bleeds into the next turn
     this.pending = [];
     this.pendingOri = [];
     this.usedIds.clear();
@@ -1318,7 +1342,10 @@ const TEMPLATE = `
       <button id="btn-help" class="icon" title="How to play">?</button>
       <button id="btn-quit" class="icon" title="Quit to menu">✕</button>
     </header>
-    <canvas class="board"></canvas>
+    <div class="stage">
+      <canvas class="board"></canvas>
+      <div class="turn-banner" hidden></div>
+    </div>
     <footer class="controls">
       <div class="status"></div>
       <div class="hand"></div>
