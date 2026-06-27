@@ -108,6 +108,10 @@ const BIRD_DISTURB_MS = 3000; // a placed tile keeps birds away from its area th
 export class Scene {
   private ctx: CanvasRenderingContext2D;
   private dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  /** Device ratio for cache tiles. Foliage and acre-feed scatter are soft,
+   *  organic art, so a 3× backing store is wasted memory and fill for no visible
+   *  gain — cap at 2× (the on-screen canvas still uses the full dpr). */
+  private tileDpr = Math.min(2, Math.max(1, Math.min(3, window.devicePixelRatio || 1)));
   private cells = new Map<string, Cell>();
   private enclosed = new Set<string>();
   /** cell keys to pulse red — set when the engine rejects a Confirm. */
@@ -187,6 +191,13 @@ export class Scene {
    *  work. The live alpha pulse, scale pulse and sub-cell drift are applied at
    *  blit, not baked in. Small + bounded (a handful of keys); cleared on reset. */
   private ghostCache = new Map<string, { canvas: HTMLCanvasElement; pad: number }>();
+  /** Enclosed-acre tiles. drawAcre rebuilt the base + tint + furrows + a
+   *  deterministic feed scatter (grass / grain / mud) every frame — and once any
+   *  land is enclosed the loop runs continuously at ~30fps for the livestock, so
+   *  this repainted forever even on a still camera. Cached per cell exactly like
+   *  hedges (no neighbour mask, no bleed, so pad is 0); the only animated part —
+   *  the bobbing-emoji fallback when a sprite sheet hasn't loaded — stays live. */
+  private acreCache = new Map<string, { sig: string; canvas: HTMLCanvasElement }>();
   /** Bleed room (in cells) around each cached tile so outward foliage — leaves
    *  jut ~0.2 cells out, concave-corner clumps ~0.27 — isn't clipped at the tile
    *  edge. Tiles overlap into this margin and composite in cell-iteration order,
@@ -348,6 +359,7 @@ export class Scene {
     this.enclosed.clear();
     this.hedgeCache.clear();
     this.ghostCache.clear();
+    this.acreCache.clear();
     this.ghost = null;
     this.highlights.clear();
     this.flash.clear();
@@ -390,6 +402,8 @@ export class Scene {
     // forget pop timers + cached foliage tiles for cells no longer present (undo)
     for (const k of [...this.placedAt.keys()]) if (!cells.has(k)) this.placedAt.delete(k);
     for (const k of [...this.hedgeCache.keys()]) if (!cells.has(k)) this.hedgeCache.delete(k);
+    // drop cached acre tiles for cells that are no longer enclosed land
+    for (const k of [...this.acreCache.keys()]) if (!enclosed.has(k)) this.acreCache.delete(k);
     this.cells = new Map(cells);
     this.enclosed = new Set(enclosed);
     if (acres) this.acres = new Map(acres);
@@ -1294,6 +1308,20 @@ export class Scene {
     return [Math.floor(wx), Math.floor(wy)];
   }
 
+  /** Visible world-cell rectangle (with a margin for foliage bleed / pop-scale),
+   *  computed once per frame so the draw loops can cheaply skip off-screen cells.
+   *  draw() iterates the whole board; on a large board zoomed in, that's a lot of
+   *  transforms + blits the browser would only clip away. */
+  private visibleCellBounds(margin = 1.5): { x0: number; y0: number; x1: number; y1: number } {
+    const vw = this.canvas.width / this.dpr;
+    const vh = this.canvas.height / this.dpr;
+    const x0 = this.camX - vw / 2 / this.scale - margin;
+    const y0 = this.camY - vh / 2 / this.scale - margin;
+    const x1 = this.camX + vw / 2 / this.scale + margin;
+    const y1 = this.camY + vh / 2 / this.scale + margin;
+    return { x0, y0, x1, y1 };
+  }
+
   // ---- input ----
   private bindInput(): void {
     let down = false;
@@ -1510,10 +1538,15 @@ export class Scene {
 
     this.drawGrid(vw, vh);
 
+    // visible-cell window — skip off-screen acres/hedges (they'd only be clipped)
+    const vis = this.visibleCellBounds();
+    const onScreen = (x: number, y: number) => x >= vis.x0 && x <= vis.x1 && y >= vis.y0 && y <= vis.y1;
+
     // enclosed acres
     for (const k of this.enclosed) {
       const [x, y] = k.split(",").map(Number);
-      this.drawAcre(x, y);
+      if (!onScreen(x, y)) continue;
+      this.drawAcreCached(x, y);
     }
     // flashing newly-scored acres
     const now = performance.now();
@@ -1538,6 +1571,7 @@ export class Scene {
     for (const [k, cell] of this.cells) {
       if (rotateSkipKeys.has(k)) continue;
       const [x, y] = k.split(",").map(Number);
+      if (!onScreen(x, y)) continue;
       const t0 = this.placedAt.get(k);
       let pop = 1;
       if (t0 !== undefined) {
@@ -1830,31 +1864,33 @@ export class Scene {
     ctx.stroke();
   }
 
-  private drawAcre(x: number, y: number): void {
+  /** Cached enclosed-acre draw: render the static land (base + tint + furrows +
+   *  feed scatter) once per (owner colour, animal, scale-bucket) and blit it,
+   *  then draw the animated bobbing-emoji fallback live on top when no sprite. */
+  private drawAcreCached(x: number, y: number): void {
+    const owner = this.acres.get(key(x, y));
+    const bucket = this.scaleBucket(this.scale);
+    const sig = owner ? `${owner.colour}|${owner.animal}|${bucket}` : `none|${bucket}`;
+    const ck = key(x, y);
+    let entry = this.acreCache.get(ck);
+    if (!entry || entry.sig !== sig) {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(bucket * this.tileDpr);
+      canvas.height = Math.ceil(bucket * this.tileDpr);
+      const tctx = canvas.getContext("2d")!;
+      tctx.scale(this.tileDpr, this.tileDpr);
+      this.paintAcre(tctx, 0, 0, bucket, owner, hash(x, y));
+      entry = { sig, canvas };
+      this.acreCache.set(ck, entry);
+    }
     const ctx = this.ctx;
     const [px, py] = this.worldToScreen(x, y);
     const s = this.scale;
-    const owner = this.acres.get(key(x, y));
-    ctx.fillStyle = ACRE_HEX;
-    ctx.fillRect(px, py, s, s);
-    if (owner) {
-      ctx.fillStyle = hexA(owner.colour, 0.3); // tint the claimed land in the farmer's colour
-      ctx.fillRect(px, py, s, s);
-    }
-    // faint furrows so enclosed land reads as a tended field
-    ctx.strokeStyle = "rgba(120,160,80,0.22)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = 1; i < 4; i++) {
-      ctx.moveTo(px + 2, py + (s * i) / 4);
-      ctx.lineTo(px + s - 2, py + (s * i) / 4);
-    }
-    ctx.stroke();
-    // owner's livestock feed scattered on their land: grass (sheep/cow),
-    // grain (chicken), mud wallow (pig) — a deterministic, per-cell touch.
-    if (owner && s > 14) this.drawAcreFood(px, py, s, owner.animal, hash(x, y));
+    ctx.drawImage(entry.canvas, px, py, s, s);
+
     // Animals: when the sprite sheet is loaded they roam free-range (drawn
     // separately as critters). Without it, fall back to a bobbing emoji per cell.
+    // This bobs, so it's never baked into the cache — drawn live over the tile.
     if (owner && s > 22 && !this.sprites.ready(owner.animal)) {
       const phase = (hash(x, y) & 1023) / 1023;
       let bob = 0;
@@ -1874,9 +1910,47 @@ export class Scene {
       ctx.restore();
     }
   }
+
+  /** Pure painter: the static land of one enclosed acre — base fill, owner tint,
+   *  furrows and the deterministic feed scatter — at (px,py) with cell size s
+   *  into the given context. The roaming/bobbing animals are NOT drawn here. */
+  private paintAcre(
+    ctx: CanvasRenderingContext2D,
+    px: number,
+    py: number,
+    s: number,
+    owner: { colour: string; animal: string } | undefined,
+    seed: number,
+  ): void {
+    ctx.fillStyle = ACRE_HEX;
+    ctx.fillRect(px, py, s, s);
+    if (owner) {
+      ctx.fillStyle = hexA(owner.colour, 0.3); // tint the claimed land in the farmer's colour
+      ctx.fillRect(px, py, s, s);
+    }
+    // faint furrows so enclosed land reads as a tended field
+    ctx.strokeStyle = "rgba(120,160,80,0.22)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 1; i < 4; i++) {
+      ctx.moveTo(px + 2, py + (s * i) / 4);
+      ctx.lineTo(px + s - 2, py + (s * i) / 4);
+    }
+    ctx.stroke();
+    // owner's livestock feed scattered on their land: grass (sheep/cow),
+    // grain (chicken), mud wallow (pig) — a deterministic, per-cell touch.
+    if (owner && s > 14) this.drawAcreFood(ctx, px, py, s, owner.animal, seed);
+  }
+
   /** Scatter the owner's feed across an enclosed acre (deterministic per cell). */
-  private drawAcreFood(px: number, py: number, s: number, animal: string, seed: number): void {
-    const ctx = this.ctx;
+  private drawAcreFood(
+    ctx: CanvasRenderingContext2D,
+    px: number,
+    py: number,
+    s: number,
+    animal: string,
+    seed: number,
+  ): void {
     const rng = makeRng(seed);
     const inset = s * 0.12;
     const x0 = px + inset;
@@ -2058,10 +2132,10 @@ export class Scene {
     const pad = Scene.HEDGE_PAD;
     const tileCss = bucket * (1 + 2 * pad);
     const canvas = document.createElement("canvas");
-    canvas.width = Math.ceil(tileCss * this.dpr);
-    canvas.height = Math.ceil(tileCss * this.dpr);
+    canvas.width = Math.ceil(tileCss * this.tileDpr);
+    canvas.height = Math.ceil(tileCss * this.tileDpr);
     const tctx = canvas.getContext("2d")!;
-    tctx.scale(this.dpr, this.dpr);
+    tctx.scale(this.tileDpr, this.tileDpr);
     const o = pad * bucket; // cell's top-left within the padded tile
     this.paintHedge(tctx, o, o, bucket, colour, 1, danger, hedgeMask, diagMask, x, y);
     return { sig, canvas, pad, bucket };
@@ -2092,10 +2166,10 @@ export class Scene {
       const pad = Scene.HEDGE_PAD;
       const tileCss = bucket * (1 + 2 * pad);
       const canvas = document.createElement("canvas");
-      canvas.width = Math.ceil(tileCss * this.dpr);
-      canvas.height = Math.ceil(tileCss * this.dpr);
+      canvas.width = Math.ceil(tileCss * this.tileDpr);
+      canvas.height = Math.ceil(tileCss * this.tileDpr);
       const tctx = canvas.getContext("2d")!;
-      tctx.scale(this.dpr, this.dpr);
+      tctx.scale(this.tileDpr, this.tileDpr);
       const o = pad * bucket;
       this.paintHedge(tctx, o, o, bucket, colour, 1, !valid, mask, 0, seg, 0, true);
       entry = { canvas, pad };
