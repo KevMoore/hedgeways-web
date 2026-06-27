@@ -46,6 +46,12 @@ const ALL_ORI: OriSpec[] = [
   ["V", true],
 ];
 const DEFAULT_ORI = 1; // ["V", false] — a fresh hedge lays vertical (top-to-bottom)
+/** How far a dropped tile may be nudged to find a free spot when it lands on an
+ *  occupied cell, instead of bouncing back. Rings out cell-by-cell; on the
+ *  unbounded sparse grid a free anchor is always within a step or two. */
+const NUDGE_RADIUS = 8;
+/** Glide duration (s) for a dropped tile settling into its snapped cell. */
+const SNAP_TWEEN = 0.18;
 
 export class GameUI {
   game: Game;
@@ -62,6 +68,9 @@ export class GameUI {
    *  match the hand chip's vertical 3-segment layout. */
   private oriIndex = DEFAULT_ORI;
   private busy = false;
+  /** True while a dropped tile is mid-glide into its snapped cell. Blocks new
+   *  pickups/taps for the ~180ms tween so a second gesture can't race it. */
+  private placing = false;
   private invalidTimer: number | null = null;
   private botTimer: number | null = null;
   /** active farmer-portrait raf widgets, disposed before re-render */
@@ -579,38 +588,113 @@ export class GameUI {
     return true;
   }
 
+  /** Nearest anchor to (tx,ty) where the oriented tile physically fits (clear of
+   *  committed hedges, enclosed acres, and other pendings), searched ring by ring
+   *  out to NUDGE_RADIUS. Returns the fitting cells + anchor, or null if boxed in
+   *  on every side (pathological on the unbounded grid). Adjacency/colour are NOT
+   *  considered — like every drop, those stay deferred to Confirm, so a lone first
+   *  hedge or a not-yet-connected run still lands. */
+  private nearestFit(
+    tile: Tile,
+    tx: number,
+    ty: number,
+    oriIndex: number,
+  ): { cells: PlacedTile["cells"]; tx: number; ty: number } | null {
+    const [dir, flip] = ALL_ORI[oriIndex];
+    const at = (ax: number, ay: number) => {
+      const cells = orient(tile, ax, ay, dir, flip);
+      return this.overlapsOccupied(cells) ? null : cells;
+    };
+    const direct = at(tx, ty);
+    if (direct) return { cells: direct, tx, ty };
+    for (let r = 1; r <= NUDGE_RADIUS; r++) {
+      let best: { cells: PlacedTile["cells"]; tx: number; ty: number } | null = null;
+      let bestD = Infinity;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring perimeter only
+          const cells = at(tx + dx, ty + dy);
+          if (!cells) continue;
+          const d = dx * dx + dy * dy; // nearest by Euclidean distance within the ring
+          if (d < bestD) {
+            bestD = d;
+            best = { cells, tx: tx + dx, ty: ty + dy };
+          }
+        }
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  /** Land a tile as a pending placement: nudge to the nearest free anchor if the
+   *  requested one is blocked (never bounce back), then glide it from where it was
+   *  released (startOx/startOy = sub-cell drift at drop, world units) into its
+   *  snapped cell. Commits the pending only once the tween settles. */
+  private dropTile(tile: Tile, anchorX: number, anchorY: number, startOx: number, startOy: number): void {
+    const fit = this.nearestFit(tile, anchorX, anchorY, this.oriIndex);
+    if (!fit) {
+      // Boxed in on every side within NUDGE_RADIUS — return the tile to hand
+      // rather than force an overlap. Essentially unreachable in real play.
+      this.selectedId = null;
+      sfx.invalid();
+      this.scene.setGhost(null, false);
+      this.syncScene();
+      this.renderHand(false);
+      this.updateButtons();
+      this.emitGhost();
+      return;
+    }
+    const commit = () => {
+      this.placing = false;
+      if (!this.alive) return; // torn down mid-glide — nothing to commit to
+      this.pending.push({ tileId: tile.id, cells: fit.cells });
+      this.pendingOri.push(this.oriIndex);
+      this.usedIds.add(tile.id);
+      this.selectedId = null;
+      sfx.place();
+      this.scene.setGhost(null, false);
+      this.refreshHighlights();
+      this.syncScene();
+      this.renderHand(false);
+      this.updateButtons();
+      this.emitGhost();
+      const hits = this.connectingCells(fit.cells, tile.id);
+      if (hits.length > 0) {
+        sfx.connect();
+        this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
+      }
+    };
+    // Glide from the release position (final cell + leftover drift) to the cell.
+    const sx = anchorX - fit.tx + startOx;
+    const sy = anchorY - fit.ty + startOy;
+    if (this.reduceMotion || (Math.abs(sx) < 0.01 && Math.abs(sy) < 0.01)) {
+      commit();
+      return;
+    }
+    this.placing = true;
+    this.scene.setGhost(fit.cells, true);
+    const o = { ox: sx, oy: sy };
+    this.scene.setGhostFloat(sx, sy);
+    gsap.to(o, {
+      ox: 0,
+      oy: 0,
+      duration: SNAP_TWEEN,
+      ease: "power3.out",
+      onUpdate: () => this.scene.setGhostFloat(o.ox, o.oy),
+      onComplete: commit,
+    });
+  }
+
   private onTapCell(x: number, y: number): void {
-    if (this.busy || this.game.currentPlayer.isBot) return;
+    if (this.busy || this.placing || this.game.currentPlayer.isBot) return;
     if (this.selectedId == null || this.pending.length >= MAX_LAY) return;
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
-    const [dir, flip] = ALL_ORI[this.oriIndex];
-    const cells = orient(tile, x, y, dir, flip);
-    if (this.overlapsOccupied(cells)) {
-      // can't physically sit there — donkey + show a brief red ghost
-      this.flashInvalid(cells);
-      return;
-    }
-    // Free placement: tile lands exactly where the finger dropped it. Any
-    // adjacency / colour rules are checked when the player presses Confirm.
-    this.pending.push({ tileId: tile.id, cells });
-    this.pendingOri.push(this.oriIndex);
-    this.usedIds.add(tile.id);
-    this.selectedId = null;
-    sfx.place();
-    this.scene.setGhost(null, false);
-    this.refreshHighlights();
-    this.syncScene(); // refreshes rotate icon + status from pending
-    this.renderHand(false);
-    this.updateButtons();
-    this.emitGhost();
-    // If any cell of the new tile sits next to a matching-colour neighbour
-    // (committed or pending), reward the player with a chime + ring flash.
-    const hits = this.connectingCells(cells, tile.id);
-    if (hits.length > 0) {
-      sfx.connect();
-      this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
-    }
+    // Free placement: lands at the tapped cell, or glides to the nearest free
+    // spot if that one's taken (never a flat rejection). Adjacency / colour
+    // rules stay deferred to Confirm.
+    this.dropTile(tile, x, y, 0, 0);
   }
 
   /** Return the cells of a freshly-placed tile whose colour matches at least
@@ -661,7 +745,7 @@ export class GameUI {
    *  up (remove from pending, set as selected, remember origin). Returns
    *  true to claim the gesture; false to let the scene pan as normal. */
   private tryPickPending(x: number, y: number): boolean {
-    if (this.busy || this.game.currentPlayer.isBot) return false;
+    if (this.busy || this.placing || this.game.currentPlayer.isBot) return false;
     if (this.pickedOrigin !== null) return false;
     const idx = this.pending.findIndex((p) => p.cells.some((c) => c.x === x && c.y === y));
     if (idx < 0) return false;
@@ -684,6 +768,7 @@ export class GameUI {
     this.syncScene();
     this.renderHand(false);
     this.updateButtons();
+    this.scene.setGhostFloat(0, 0); // overlay sits exactly on the picked-up tile
     this.onHover(x, y); // ghost overlays the tile exactly where it sat
     return true;
   }
@@ -734,6 +819,11 @@ export class GameUI {
     const lifted = target[0] !== finger[0] || target[1] !== finger[1];
     this.scene.setFingerMarker(lifted ? { x: finger[0], y: finger[1] } : null);
     this.onHover(target[0], target[1]);
+    // Glide the tile under the finger: the snapped cells above are the drop
+    // target; this sub-cell offset is the smooth part. Set AFTER onHover so it
+    // isn't zeroed by the non-drag reset there.
+    const [ox, oy] = this.scene.dragFloatAt(clientX, clientY);
+    this.scene.setGhostFloat(ox, oy);
   }
 
   private onPickedRelease(x: number, y: number, clientX: number, clientY: number): void {
@@ -767,51 +857,19 @@ export class GameUI {
     }
     // Land where the ghost sat — back out the grab offset so the anchor lands
     // such that the grabbed point is under the finger (WYSIWYG with the preview).
+    // If that cell is occupied, dropTile nudges to the nearest free spot rather
+    // than bouncing the tile back to where it came from.
     const tx = lifted!.target[0] - this.grabOffset.dx;
     const ty = lifted!.target[1] - this.grabOffset.dy;
-    const [dir, flip] = ALL_ORI[this.oriIndex];
-    const cells = orient(tile, tx, ty, dir, flip);
+    const [sox, soy] = this.scene.dragFloatAt(clientX, clientY);
     void x;
     void y;
-    if (this.overlapsOccupied(cells)) {
-      // Bray + restore to original position.
-      const orig = this.pickedOrigin;
-      this.pickedOrigin = null;
-      if (orig) {
-        this.pending.push(orig.placement);
-        this.pendingOri.push(orig.oriIdx);
-        this.usedIds.add(orig.placement.tileId);
-      }
-      this.selectedId = null;
-      sfx.invalid();
-      this.scene.setGhost(null, false);
-      this.syncScene();
-      this.renderHand(false);
-      this.updateButtons();
-      this.emitGhost();
-      return;
-    }
-    // Land at the new spot.
     this.pickedOrigin = null;
-    this.pending.push({ tileId: tile.id, cells });
-    this.pendingOri.push(this.oriIndex);
-    this.usedIds.add(tile.id);
-    this.selectedId = null;
-    sfx.place();
-    this.scene.setGhost(null, false);
-    this.syncScene();
-    this.renderHand(false);
-    this.updateButtons();
-    this.emitGhost();
-    const hits = this.connectingCells(cells, tile.id);
-    if (hits.length > 0) {
-      sfx.connect();
-      this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
-    }
+    this.dropTile(tile, tx, ty, sox, soy);
   }
 
   private onHover(x: number, y: number): void {
-    if (this.busy || this.game.currentPlayer.isBot || this.selectedId == null) return;
+    if (this.busy || this.placing || this.game.currentPlayer.isBot || this.selectedId == null) return;
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
     const [dir, flip] = ALL_ORI[this.oriIndex];
@@ -823,6 +881,7 @@ export class GameUI {
     // so the ghost doesn't strobe red as it crosses occupied cells — drop-time
     // validation (bray + bounce-back / flashInvalid) carries the "no" signal.
     const valid = this.dragging ? true : !this.overlapsOccupied(cells);
+    if (!this.dragging) this.scene.setGhostFloat(0, 0); // hover/tap preview sits on the grid
     this.scene.setGhost(cells, valid);
     this.emitGhost(cells); // stream the live preview position to the opponent
   }
@@ -851,6 +910,7 @@ export class GameUI {
   }
 
   private rotate(): void {
+    if (this.placing) return; // don't desync orientation from a tile mid-glide
     this.clearDanger();
     // 1) An in-hand tile is selected → rotate its preview orientation by 90°.
     if (this.selectedId != null) {
@@ -1119,6 +1179,7 @@ export class GameUI {
     let dragging = false;
     let pid = -1;
     d.addEventListener("pointerdown", (e) => {
+      if (this.busy || this.placing) return;
       if (this.usedIds.has(tileId)) return;
       if (this.pending.length >= MAX_LAY && this.selectedId !== tileId) return;
       e.preventDefault(); // suppress browser drag/select fallback (mobile especially)
@@ -1185,9 +1246,15 @@ export class GameUI {
       // and the tile would drop where the finger is, not where the ghost is.
       if (this.scene.pointOverBoard(e.clientX, e.clientY)) {
         const { target } = this.scene.liftedCellAt(e.clientX, e.clientY, this.currentOri(), this.liftSide);
+        const [sox, soy] = this.scene.dragFloatAt(e.clientX, e.clientY);
         this.scene.setTouchGhostOffset(false);
         this.scene.setFingerMarker(null);
-        this.onTapCell(target[0], target[1]); // places, or flashInvalid + donkey
+        const tile = this.handTile(tileId);
+        // Glide the dropped tile into its snapped cell (nudging to the nearest
+        // free spot if the target's taken). Guard mirrors onTapCell's.
+        if (tile && !this.busy && !this.placing && this.pending.length < MAX_LAY) {
+          this.dropTile(tile, target[0], target[1], sox, soy);
+        }
       } else {
         this.scene.setTouchGhostOffset(false);
         this.scene.setFingerMarker(null);

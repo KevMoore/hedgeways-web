@@ -116,6 +116,12 @@ export class Scene {
   private connectFlash = new Map<string, number>();
   private CONNECT_FLASH_MS = 600;
   private ghost: Ghost | null = null;
+  /** Sub-cell render offset (world units, ~-0.5..0.5 per axis) applied to the
+   *  held ghost while a drag is live, so the tile glides under the finger
+   *  instead of snapping cell-to-cell. The ghost's CELLS stay snapped (they're
+   *  the drop target + adjacency basis); only the pixels shift. Zeroed the
+   *  moment the tile settles, clears, or is merely hovered. */
+  private ghostFloat = { ox: 0, oy: 0 };
   /** Online presence: cells the OPPONENT is tentatively placing this turn, shown
    *  as colourless shadows (positions only — never their tile colours). */
   private opponentGhost: Array<[number, number]> = [];
@@ -1034,6 +1040,28 @@ export class Scene {
   }
 
   /** Game-ui toggles this when a touch-initiated drag starts/ends. */
+  /** Set the live sub-cell drift of the held tile (world units). Called each
+   *  drag frame; ignored as a no-op when unchanged so it can be spammed. */
+  setGhostFloat(ox: number, oy: number): void {
+    if (this.ghostFloat.ox === ox && this.ghostFloat.oy === oy) return;
+    this.ghostFloat = { ox, oy };
+    this.needsDraw = true;
+  }
+
+  /** Offset of a client point from the CENTRE of the cell it falls in, in world
+   *  units (each axis ~-0.5..0.5). Added to the snapped ghost cells, this makes
+   *  the tile track the finger continuously: as the finger nears a cell edge the
+   *  offset grows to ±0.5, then the snapped cell flips by one and the offset
+   *  wraps to ∓0.5 — same pixel, so the motion is seamless. */
+  dragFloatAt(clientX: number, clientY: number): [number, number] {
+    const rect = this.canvas.getBoundingClientRect();
+    const vw = this.canvas.width / this.dpr;
+    const vh = this.canvas.height / this.dpr;
+    const wx = (clientX - rect.left - vw / 2) / this.scale + this.camX;
+    const wy = (clientY - rect.top - vh / 2) / this.scale + this.camY;
+    return [wx - Math.floor(wx) - 0.5, wy - Math.floor(wy) - 0.5];
+  }
+
   setTouchGhostOffset(on: boolean): void {
     if (this.touchGhostOffset !== on) {
       this.touchGhostOffset = on;
@@ -1083,6 +1111,8 @@ export class Scene {
 
   setGhost(cells: PlacedCell[] | null, valid: boolean): void {
     this.ghost = cells && cells.length ? { cells, valid } : null;
+    if (!this.ghost) this.ghostFloat = { ox: 0, oy: 0 }; // settled/cleared → no drift
+
     // A valid ghost hovering near a perch spooks the bird off early; while it
     // lingers, birds also avoid re-perching there (ghostDisturb). Only perched
     // birds flush, so the per-frame setGhost spam is idempotent.
@@ -1577,13 +1607,14 @@ export class Scene {
       const pulse = (Math.sin(now / 220) + 1) / 2; // 0..1
       const ghostAlpha = this.ghost.valid ? 0.5 + pulse * 0.25 : 0.4;
       const ghostScale = this.ghost.valid ? 0.97 + pulse * 0.06 : 1;
+      const { ox, oy } = this.ghostFloat;
       for (const c of this.ghost.cells) {
         const mask =
           (hasHedge(c.x, c.y - 1) ? 1 : 0) |
           (hasHedge(c.x + 1, c.y) ? 2 : 0) |
           (hasHedge(c.x, c.y + 1) ? 4 : 0) |
           (hasHedge(c.x - 1, c.y) ? 8 : 0);
-        this.drawHedge(c.x, c.y, c.colour, ghostAlpha, !this.ghost.valid, ghostScale, mask);
+        this.drawHedge(c.x + ox, c.y + oy, c.colour, ghostAlpha, !this.ghost.valid, ghostScale, mask);
       }
     }
     // opponent presence (online) — SOLID colourless tile silhouettes where the
