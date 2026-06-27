@@ -1224,10 +1224,14 @@ export class GameUI {
       pid = e.pointerId;
       startX = e.clientX;
       startY = e.clientY;
-      try {
-        d.setPointerCapture(e.pointerId);
-      } catch {
-        /* ignore */
+      // Mouse/pen only: touch has implicit capture, and an explicit capture
+      // during a touch makes iOS swallow the next tap on a control (see scene).
+      if (e.pointerType !== "touch") {
+        try {
+          d.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
       }
     });
     d.addEventListener("pointermove", (e) => {
@@ -1265,10 +1269,12 @@ export class GameUI {
       dragging = false;
       this.dragging = false;
       this.scene.setDragClient(null); // disarm edge-auto-pan
-      try {
-        d.releasePointerCapture(pid);
-      } catch {
-        /* ignore */
+      if (e.pointerType !== "touch") {
+        try {
+          d.releasePointerCapture(pid);
+        } catch {
+          /* ignore */
+        }
       }
       if (!wasDrag) {
         this.scene.setTouchGhostOffset(false);

@@ -1282,6 +1282,16 @@ export class Scene {
     const c = this.canvas;
     c.style.touchAction = "none";
 
+    // Explicit pointer capture is only needed for mouse/pen — they have NO
+    // implicit capture, so without it a drag stops tracking once the cursor
+    // leaves the canvas. TOUCH already gets implicit pointer capture to the
+    // target, AND an explicit setPointerCapture during a touch makes iOS Safari
+    // swallow the *next* tap on a DOM control (Confirm/Undo/Rotate read as
+    // needing two taps after any board touch). So capture for mouse/pen only.
+    const capture = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") c.setPointerCapture(e.pointerId);
+    };
+
     c.addEventListener("pointerdown", (e) => {
       // If a tile-drag or rotate-icon press is already in flight, ignore
       // any additional touches — they must not start a pan / pinch on top
@@ -1297,7 +1307,7 @@ export class Scene {
           const px = e.clientX - rect.left;
           const py = e.clientY - rect.top;
           if (Math.hypot(px - ri.cx, py - ri.cy) <= ri.r + 8) {
-            c.setPointerCapture(e.pointerId);
+            capture(e);
             rotatePointer = e.pointerId;
             return;
           }
@@ -1308,13 +1318,13 @@ export class Scene {
         const rect = c.getBoundingClientRect();
         const [cx, cy] = this.screenToCell(e.clientX - rect.left, e.clientY - rect.top);
         if (this.dragStart(cx, cy, e.clientX, e.clientY, e.pointerType === "touch")) {
-          c.setPointerCapture(e.pointerId);
+          capture(e);
           claimedPointer = e.pointerId;
           this.setDragClient(e.clientX, e.clientY); // arm edge-auto-pan
           return;
         }
       }
-      c.setPointerCapture(e.pointerId);
+      capture(e);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       down = true;
       moved = false;
