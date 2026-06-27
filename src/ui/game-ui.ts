@@ -68,9 +68,15 @@ export class GameUI {
    *  match the hand chip's vertical 3-segment layout. */
   private oriIndex = DEFAULT_ORI;
   private busy = false;
-  /** True while a dropped tile is mid-glide into its snapped cell. Blocks new
-   *  pickups/taps for the ~180ms tween so a second gesture can't race it. */
+  /** True while a just-dropped tile is mid-glide into its snapped cell. The tile
+   *  is ALREADY committed to pending state (so buttons/counts are live) — this
+   *  only marks the cosmetic tween, during which the tile is hidden from the
+   *  board and shown as a sliding ghost instead. */
   private placing = false;
+  /** The pending tile currently gliding (hidden from the board), and its tween,
+   *  so any follow-up action can settle it instantly via finishGlide(). */
+  private glideTileId: number | null = null;
+  private glideTween: gsap.core.Tween | null = null;
   private invalidTimer: number | null = null;
   private botTimer: number | null = null;
   /** active farmer-portrait raf widgets, disposed before re-render */
@@ -627,11 +633,27 @@ export class GameUI {
     return null;
   }
 
+  /** Snap any in-flight drop glide straight to its resting cell. The tile is
+   *  already in pending state — this just ends the cosmetic tween and re-shows it
+   *  on the board, so a following action starts from a fully-settled state. */
+  private finishGlide(): void {
+    if (!this.glideTween) return;
+    this.glideTween.kill();
+    this.glideTween = null;
+    this.glideTileId = null;
+    this.placing = false;
+    this.scene.setGhost(null, false);
+    this.syncScene();
+  }
+
   /** Land a tile as a pending placement: nudge to the nearest free anchor if the
-   *  requested one is blocked (never bounce back), then glide it from where it was
-   *  released (startOx/startOy = sub-cell drift at drop, world units) into its
-   *  snapped cell. Commits the pending only once the tween settles. */
+   *  requested one is blocked (never bounce back). State (pending/usedIds/buttons)
+   *  is committed SYNCHRONOUSLY so the controls are live with no delay — a
+   *  deferred commit made Confirm/Undo/Rotate miss the first tap. The tile then
+   *  glides from where it was released (startOx/startOy = sub-cell drift at drop)
+   *  into its cell purely as eye-candy. */
   private dropTile(tile: Tile, anchorX: number, anchorY: number, startOx: number, startOy: number): void {
+    this.finishGlide(); // settle any previous glide before placing the next
     const fit = this.nearestFit(tile, anchorX, anchorY, this.oriIndex);
     if (!fit) {
       // Boxed in on every side within NUDGE_RADIUS — return the tile to hand
@@ -645,49 +667,55 @@ export class GameUI {
       this.emitGhost();
       return;
     }
-    const commit = () => {
-      this.placing = false;
-      if (!this.alive) return; // torn down mid-glide — nothing to commit to
-      this.pending.push({ tileId: tile.id, cells: fit.cells });
-      this.pendingOri.push(this.oriIndex);
-      this.usedIds.add(tile.id);
-      this.selectedId = null;
-      sfx.place();
-      this.scene.setGhost(null, false);
-      this.refreshHighlights();
-      this.syncScene();
-      this.renderHand(false);
-      this.updateButtons();
-      this.emitGhost();
-      const hits = this.connectingCells(fit.cells, tile.id);
-      if (hits.length > 0) {
-        sfx.connect();
-        this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
-      }
-    };
-    // Glide from the release position (final cell + leftover drift) to the cell.
+    // --- commit to state immediately (buttons + counts live at once) ---
+    this.pending.push({ tileId: tile.id, cells: fit.cells });
+    this.pendingOri.push(this.oriIndex);
+    this.usedIds.add(tile.id);
+    this.selectedId = null;
+    sfx.place();
+    this.refreshHighlights();
+    this.renderHand(false);
+    this.updateButtons();
+    const hits = this.connectingCells(fit.cells, tile.id);
+    if (hits.length > 0) {
+      sfx.connect();
+      this.scene.flashConnections(hits.map((c) => key(c.x, c.y)));
+    }
+    // --- cosmetic glide into the cell ---
     const sx = anchorX - fit.tx + startOx;
     const sy = anchorY - fit.ty + startOy;
-    if (this.reduceMotion || (Math.abs(sx) < 0.01 && Math.abs(sy) < 0.01)) {
-      commit();
+    if (this.reduceMotion || (Math.abs(sx) < 0.02 && Math.abs(sy) < 0.02)) {
+      this.scene.setGhost(null, false);
+      this.syncScene();
+      this.emitGhost();
       return;
     }
     this.placing = true;
+    this.glideTileId = tile.id;
+    this.syncScene(); // board WITHOUT the gliding tile (workingCells excludes it)
+    this.emitGhost();
     this.scene.setGhost(fit.cells, true);
-    const o = { ox: sx, oy: sy };
     this.scene.setGhostFloat(sx, sy);
-    gsap.to(o, {
+    const o = { ox: sx, oy: sy };
+    this.glideTween = gsap.to(o, {
       ox: 0,
       oy: 0,
       duration: SNAP_TWEEN,
       ease: "power3.out",
       onUpdate: () => this.scene.setGhostFloat(o.ox, o.oy),
-      onComplete: commit,
+      onComplete: () => {
+        this.glideTween = null;
+        this.glideTileId = null;
+        this.placing = false;
+        if (!this.alive) return;
+        this.scene.setGhost(null, false);
+        this.syncScene();
+      },
     });
   }
 
   private onTapCell(x: number, y: number): void {
-    if (this.busy || this.placing || this.game.currentPlayer.isBot) return;
+    if (this.busy || this.game.currentPlayer.isBot) return;
     if (this.selectedId == null || this.pending.length >= MAX_LAY) return;
     const tile = this.handTile(this.selectedId);
     if (!tile) return;
@@ -745,7 +773,8 @@ export class GameUI {
    *  up (remove from pending, set as selected, remember origin). Returns
    *  true to claim the gesture; false to let the scene pan as normal. */
   private tryPickPending(x: number, y: number): boolean {
-    if (this.busy || this.placing || this.game.currentPlayer.isBot) return false;
+    if (this.busy || this.game.currentPlayer.isBot) return false;
+    this.finishGlide(); // settle any glide so the pending set is current before we search it
     if (this.pickedOrigin !== null) return false;
     const idx = this.pending.findIndex((p) => p.cells.some((c) => c.x === x && c.y === y));
     if (idx < 0) return false;
@@ -894,6 +923,7 @@ export class GameUI {
   }
 
   private selectTile(id: number): void {
+    this.finishGlide();
     if (this.usedIds.has(id)) return;
     if (this.pending.length >= MAX_LAY) return; // at most 3 hedges per turn
     const becomingSelected = this.selectedId !== id;
@@ -910,7 +940,7 @@ export class GameUI {
   }
 
   private rotate(): void {
-    if (this.placing) return; // don't desync orientation from a tile mid-glide
+    this.finishGlide(); // settle a gliding tile so rotate acts on the final state
     this.clearDanger();
     // 1) An in-hand tile is selected → rotate its preview orientation by 90°.
     if (this.selectedId != null) {
@@ -957,6 +987,7 @@ export class GameUI {
   }
 
   private undo(): void {
+    this.finishGlide();
     const last = this.pending.pop();
     this.pendingOri.pop();
     if (!last) return;
@@ -971,6 +1002,7 @@ export class GameUI {
   }
 
   private confirm(): void {
+    this.finishGlide();
     if (this.pending.length === 0) return;
     const move: Move = { tiles: this.pending.map((t) => ({ tileId: t.tileId, cells: t.cells })) };
     if (this.online) {
@@ -1069,7 +1101,10 @@ export class GameUI {
   // ---- rendering ----
   private workingCells(): Map<string, Cell> {
     const m = new Map(this.game.board.cells);
-    for (const t of this.pending) for (const c of t.cells) m.set(key(c.x, c.y), { colour: c.colour, tileId: t.tileId });
+    for (const t of this.pending) {
+      if (t.tileId === this.glideTileId) continue; // mid-glide — drawn as a sliding ghost, not on the board
+      for (const c of t.cells) m.set(key(c.x, c.y), { colour: c.colour, tileId: t.tileId });
+    }
     return m;
   }
 
@@ -1179,7 +1214,8 @@ export class GameUI {
     let dragging = false;
     let pid = -1;
     d.addEventListener("pointerdown", (e) => {
-      if (this.busy || this.placing) return;
+      if (this.busy) return;
+      this.finishGlide(); // settle any glide so this drag starts from a clean state
       if (this.usedIds.has(tileId)) return;
       if (this.pending.length >= MAX_LAY && this.selectedId !== tileId) return;
       e.preventDefault(); // suppress browser drag/select fallback (mobile especially)
@@ -1252,7 +1288,7 @@ export class GameUI {
         const tile = this.handTile(tileId);
         // Glide the dropped tile into its snapped cell (nudging to the nearest
         // free spot if the target's taken). Guard mirrors onTapCell's.
-        if (tile && !this.busy && !this.placing && this.pending.length < MAX_LAY) {
+        if (tile && !this.busy && this.pending.length < MAX_LAY) {
           this.dropTile(tile, target[0], target[1], sox, soy);
         }
       } else {
@@ -1429,6 +1465,7 @@ export class GameUI {
   dispose(): void {
     this.alive = false;
     this.stopClock();
+    if (this.glideTween) this.glideTween.kill();
     if (this.botTimer !== null) window.clearTimeout(this.botTimer);
     if (this.invalidTimer !== null) window.clearTimeout(this.invalidTimer);
     for (const w of this.farmerWidgets) w.dispose();
