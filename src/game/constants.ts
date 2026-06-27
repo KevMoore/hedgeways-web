@@ -31,6 +31,9 @@ export interface Farmer {
   /** bot move-scoring bias (see ai.ts) + a one-liner shown in the picker. */
   style: FarmerStyle;
   blurb: string;
+  /** Hidden from the picker, how-to roster and bot draws until the player
+   *  unlocks it (an Easter egg). See SECRET_FARMER_ID. */
+  secret?: boolean;
 }
 export const FARMERS: Farmer[] = [
   { id: "rosie", name: "Farmer Rosie", colour: "#e0524d", style: "opportunist", blurb: "Opportunist — grabs whatever acres are going" },
@@ -41,7 +44,13 @@ export const FARMERS: Farmer[] = [
   { id: "sam", name: "Farmer Sam", colour: "#3d7e3a", style: "landgrabber", blurb: "Land-grabber — aggressive, greedy expansion" },
   { id: "nell", name: "Farmer Nell", colour: "#2a6fb0", style: "steady", blurb: "Steady — cautious, consistent gains" },
   { id: "gus", name: "Farmer Gus", colour: "#8a5a2b", style: "wildcard", blurb: "Wildcard — unpredictable, mixes it up" },
+  { id: "wurzel", name: "Farmer Wurzel", colour: "#d6a01e", style: "scarecrow", blurb: "Scarecrow — gleeful chaos; grabs land on a whim", secret: true },
 ];
+
+/** The hidden Easter-egg farmer — only pickable once the player unlocks it. */
+export const SECRET_FARMER_ID = "wurzel";
+/** Farmers shown in the picker / how-to / bot draws by default (no secrets). */
+export const PUBLIC_FARMERS: Farmer[] = FARMERS.filter((f) => !f.secret);
 
 /** A farmer's bot style by id (the single source of truth for personalities). */
 export const farmerStyleFor = (farmerId?: string): FarmerStyle | undefined =>

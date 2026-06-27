@@ -54,6 +54,12 @@ export const FARMER_SHEETS: Record<string, CharAnims> = {
     action: { file: "farmers/gus/action.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 16, y: 0, w: 112, h: 128 } },
     happy: { file: "farmers/gus/happy.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 16, y: 0, w: 112, h: 128 } },
   },
+  wurzel: {
+    idle: { file: "farmers/wurzel/idle.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 0, y: 0, w: 128, h: 128 } },
+    walk: { file: "farmers/wurzel/walk.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 0, y: 0, w: 128, h: 128 } },
+    action: { file: "farmers/wurzel/action.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 0, y: 0, w: 128, h: 128 } },
+    happy: { file: "farmers/wurzel/happy.webp", fw: 128, fh: 128, count: 24, cols: 5, trim: { x: 0, y: 0, w: 128, h: 128 } },
+  },
 };
 
 export const ANIMAL_SHEETS: Record<string, CharAnims> = {

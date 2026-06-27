@@ -288,4 +288,17 @@ export const sfx = {
 		for (let i = 0; i < steps; i++)
 			tone(523 * Math.pow(1.2, i), 0.16, 'square', 0.09, i * 0.06);
 	},
+	/** Hidden barn-dance hook — a bouncy major-key folk lick over a walking bass.
+	 *  Reward for the secret start-screen sequences (Konami + critter order). */
+	jingle() {
+		const dt = 0.13;
+		// melody: C E G E  G C' B C'  (a little reel)
+		[523, 659, 784, 659, 784, 1047, 988, 1047].forEach((f, i) =>
+			tone(f, 0.17, 'triangle', 0.1, i * dt),
+		);
+		// walking bass underneath
+		[262, 196, 175, 196].forEach((f, i) =>
+			tone(f, 0.32, 'sine', 0.06, i * dt * 2),
+		);
+	},
 };

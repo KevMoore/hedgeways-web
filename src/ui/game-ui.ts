@@ -966,7 +966,9 @@ export class GameUI {
   /** Anchor the floating rotate icon at the top-right cell of the LAST
    *  pending tile, or clear if there isn't one. */
   private refreshRotateIcon(): void {
-    if (this.pending.length === 0) {
+    // Bots never rotate — keep the board free of the floating rotate icon on
+    // their turns (e.g. a leftover icon from the human's just-confirmed move).
+    if (this.pending.length === 0 || this.game.currentPlayer.isBot) {
       this.scene.setRotateAt(null);
       return;
     }

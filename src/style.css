@@ -178,9 +178,6 @@ body {
   }
   .setup {
     padding: 10px;
-    gap: 8px;
-  }
-  .identity {
     gap: 7px;
   }
   .pick {
@@ -198,7 +195,10 @@ body {
     font-size: 24px;
   }
   .farmers .card-pic {
-    height: 42px;
+    height: 44px;
+  }
+  .carousel .card {
+    width: 66px;
   }
   .card-name {
     font-size: 10px;
@@ -207,22 +207,19 @@ body {
     width: 36px;
     height: 36px;
   }
-  .preview {
-    padding: 6px 8px;
-    gap: 8px;
+  .hero {
+    padding: 7px 9px;
+    gap: 9px;
   }
-  .preview .pv-farmer {
-    width: 44px;
-    height: 44px;
+  .hero .pv-farmer {
+    width: 56px;
+    height: 56px;
   }
   .pv-name {
     font-size: 14px;
   }
   .pv-perk {
     font-size: 11px;
-  }
-  .slot select {
-    padding: 6px;
   }
 }
 .logo,
@@ -247,6 +244,28 @@ body {
 .tag {
   color: #4a5a4a;
   margin: 0;
+}
+/* cryptic, slowly-rotating teaser pointing the curious at the hidden secrets */
+.hint {
+  min-height: 1.15em;
+  margin: 1px 0 -3px;
+  font-size: 0.82rem;
+  font-style: italic;
+  color: #6f7a6a;
+  opacity: 0;
+}
+.hint.show {
+  animation: hint-fade 5.2s ease both;
+}
+@keyframes hint-fade {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  12%,
+  82% {
+    opacity: 0.8;
+  }
 }
 
 /* ambient farmyard motifs drifting up behind the menu */
@@ -309,6 +328,24 @@ body {
     transform: translateY(-5px) rotate(-4deg);
   }
 }
+/* Easter-egg payoff: a rainbow hue-sweep + bounce over the decorative hedge-row. */
+.hedge-row.party {
+  animation: party-hue 1.4s linear;
+}
+.hedge-row.party span {
+  animation: party-pop 0.6s ease both;
+  animation-delay: calc(var(--i) * 0.07s);
+}
+@keyframes party-hue {
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+@keyframes party-pop {
+  40% {
+    transform: translateY(-12px) scale(1.3) rotate(10deg);
+  }
+}
 .setup {
   width: 100%;
   background: #fff;
@@ -340,12 +377,7 @@ body {
   background: var(--green);
   color: #fff;
 }
-/* ---------- identity picker: farmer + livestock + live preview ---------- */
-.identity {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
+/* ---------- identity picker: hero preview + farmer carousel + livestock ---------- */
 .pick {
   display: flex;
   flex-direction: column;
@@ -362,6 +394,62 @@ body {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
+}
+
+/* farmer carousel: a horizontal swipe strip with fade-out arrows for the desktop.
+   Snaps the chosen farmer to centre; the strip scrolls rather than wrapping to a
+   second row, so adding farmers never grows the menu's height. */
+.carousel-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.carousel {
+  display: flex;
+  grid-template-columns: none; /* override .cards grid */
+  gap: 8px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding: 4px 2px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.carousel::-webkit-scrollbar {
+  display: none;
+}
+.carousel .card {
+  flex: 0 0 auto;
+  width: 74px;
+  scroll-snap-align: center;
+}
+.car-arrow {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 56px;
+  border: none;
+  background: none;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--frame);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.18s ease, transform 0.12s ease;
+}
+.car-arrow:hover {
+  opacity: 1;
+}
+.car-arrow:active {
+  transform: scale(0.85);
+}
+.car-arrow.hide {
+  opacity: 0;
+  pointer-events: none;
+}
+/* coarse pointers swipe — the arrows are desktop affordance only */
+@media (hover: none) {
+  .car-arrow {
+    display: none;
+  }
 }
 .card {
   position: relative;
@@ -418,6 +506,15 @@ body {
   box-shadow: 0 0 0 3px var(--pc, #6cc24a) inset;
   background: color-mix(in srgb, var(--pc, #6cc24a) 12%, #fff);
 }
+/* the secret farmer card — a soft golden shimmer so it reads as a reward */
+.farmers .card.secret {
+  animation: secret-glow 2.4s ease-in-out infinite;
+}
+@keyframes secret-glow {
+  50% {
+    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--pc, #d6a01e) 70%, transparent);
+  }
+}
 .livestock .card.on {
   border-color: var(--green);
   box-shadow: 0 0 0 3px var(--green) inset;
@@ -431,25 +528,30 @@ body {
   color: var(--frame);
 }
 
-/* live identity preview banner */
-.preview {
+/* hero: the live centrepiece showing the farmer + livestock the player has chosen,
+   their personality blurb and the animal's perk. The payoff that makes the picks
+   feel consequential — sits at the top of the setup card. */
+.hero {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   text-align: left;
-  padding: 8px 10px;
-  border-radius: 14px;
-  border: 2px solid color-mix(in srgb, var(--pc, #6cc24a) 45%, #d7e2cf);
-  background: linear-gradient(120deg, color-mix(in srgb, var(--pc, #6cc24a) 14%, #fff), #fff 70%);
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 2px solid color-mix(in srgb, var(--pc, #6cc24a) 50%, #d7e2cf);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--pc, #6cc24a) 18%, #fff), #fff 72%);
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--pc, #6cc24a) 28%, transparent);
 }
-.preview .pv-farmer {
+.hero .pv-farmer {
   flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
+  width: 68px;
+  height: 68px;
   display: grid;
   place-items: end center;
+  border-radius: 14px;
+  background: radial-gradient(ellipse at 50% 92%, color-mix(in srgb, var(--pc, #6cc24a) 28%, #fff), transparent 72%);
 }
-.preview .pv-farmer canvas {
+.hero .pv-farmer canvas {
   display: block;
 }
 .pv-text {
@@ -505,31 +607,106 @@ body {
   width: 100%;
   height: 100%;
 }
+/* ---------- opponents: a collapsed summary chip that opens the per-seat panel ---------- */
+.opponents {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.opp-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border: 2px dashed color-mix(in srgb, var(--frame) 35%, #c7d3bf);
+  border-radius: 12px;
+  background: #fff;
+  font: inherit;
+  font-weight: 700;
+  color: #4a5a4a;
+  cursor: pointer;
+}
+.opp-summary:hover {
+  border-color: var(--green);
+}
+.opp-label::before {
+  content: "🤝 ";
+}
+.opp-chevron {
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0.6;
+}
+/* opponents / table-setup modal */
+.opp-modal-card .count-row {
+  margin-bottom: 4px;
+}
+.opp-modal-card .slots {
+  margin-bottom: 4px;
+}
 .slots {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 .slot {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
+  display: flex;
   align-items: center;
+  gap: 8px;
 }
 .slot-name {
   font-weight: 600;
   text-align: left;
+  flex: 1 1 auto;
+  min-width: 0;
 }
-.slot select {
-  padding: 8px;
-  border-radius: 8px;
-  border: 1.5px solid #b9c7b2;
+/* Human/Bot toggle — a single tappable pill rather than a native dropdown */
+.chip {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 2px solid #b9c7b2;
   background: #fff;
   font: inherit;
-  text-transform: capitalize;
-  /* re-allow native control selection (overrides body's user-select:none) */
-  -webkit-user-select: auto;
-  user-select: auto;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip.type-chip.human {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, #fff);
+  color: var(--frame);
+}
+/* difficulty segmented control: compact E/M/H/X, shown only for bot seats */
+.diff-seg {
+  flex: 0 0 auto;
+  display: inline-flex;
+  border: 1.5px solid #b9c7b2;
+  border-radius: 9px;
+  overflow: hidden;
+}
+.diff-seg[hidden] {
+  display: none;
+}
+.diff-seg button {
+  width: 30px;
+  height: 32px;
+  border: none;
+  border-left: 1px solid #d7e2cf;
+  background: #fff;
+  font: inherit;
+  font-weight: 700;
+  color: #6f7a6a;
+  cursor: pointer;
+}
+.diff-seg button:first-child {
+  border-left: none;
+}
+.diff-seg button.on {
+  background: var(--green);
+  color: #fff;
 }
 .start-btns {
   display: flex;

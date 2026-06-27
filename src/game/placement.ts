@@ -10,13 +10,15 @@ export interface ValidationResult {
 
 /**
  * Validate a turn's placed tiles against the board.
- * Rules (Qwirkle-strict on colour, but laid hedges need NOT all join up):
+ * Rules (Qwirkle-strict on colour):
  *  - every cell empty, not inside an enclosed field, no self-overlap
  *  - every orthogonally abutting segment-pair (to existing tiles OR between this
  *    turn's distinct tiles) must be the SAME colour
- *  - unless it's the very first move, EACH separate run of laid hedges must touch
- *    >=1 existing tile — so you can drop several unrelated hedges in one turn, but
- *    each must still attach to the existing hedgerow network (no floating hedges)
+ *  - all hedges laid this turn must JOIN UP into one connected run: each laid
+ *    hedge has to abut at least one other hedge laid in the same turn. (Subtle
+ *    rule — easy to miss — so the rejection spells it out.)
+ *  - unless it's the very first move, that run must also touch >=1 existing hedge
+ *    (no hedges floating free of the established hedgerow network)
  */
 export function validateMove(board: Board, tiles: PlacedTile[]): ValidationResult {
   if (tiles.length === 0) return { ok: false, reason: "empty move" };
@@ -55,14 +57,18 @@ export function validateMove(board: Board, tiles: PlacedTile[]): ValidationResul
     }
   }
 
-  // After the opening move, every separate run of laid hedges must anchor to the
-  // existing network — unrelated hedges are fine, floating ones are not.
-  if (board.size > 0) {
-    for (const comp of components(moveCells)) {
-      if (!touchesExisting(comp, board))
-        return { ok: false, reason: "not linked to an existing hedge" };
-    }
-  }
+  // Every hedge laid this turn must connect to another hedge laid this turn, so
+  // the whole turn forms ONE connected run. (With MAX_LAY=3, "each laid hedge
+  // touches another laid hedge" is equivalent to the laid cells forming a single
+  // orthogonal component — an isolated tile would be its own component.)
+  const comps = components(moveCells);
+  if (comps.length > 1)
+    return { ok: false, reason: "every hedge you lay in a turn must connect to another hedge from the same turn" };
+
+  // After the opening move, that one run must also anchor to the existing
+  // network — no hedges floating free of the established hedgerow.
+  if (board.size > 0 && !touchesExisting(comps[0], board))
+    return { ok: false, reason: "not linked to an existing hedge" };
 
   return { ok: true };
 }

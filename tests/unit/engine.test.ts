@@ -202,15 +202,27 @@ describe("placement (Qwirkle-strict)", () => {
     expect(validateMove(b, m).ok).toBe(false);
   });
 
-  it("allows several unrelated hedges in one turn if each links to the board", () => {
+  it("rejects hedges laid in one turn that don't connect to each other", () => {
     const b = new Board();
     // two separate existing hedgerows, far apart
     for (const c of orient(tile(1, "GGG"), 0, 0, "H", false)) b.place(c, 1);
     for (const c of orient(tile(2, "YYY"), 20, 0, "H", false)) b.place(c, 1);
-    // two laid hedges that DON'T touch each other — each anchors to its own run
+    // two laid hedges that each anchor to the board but DON'T touch each other:
+    // illegal — every hedge laid in a turn must join the others laid that turn.
     const move: PlacedTile[] = [
       { tileId: 3, cells: orient(tile(3, "GGG"), 0, 1, "H", false) }, // under the green run
       { tileId: 4, cells: orient(tile(4, "YYY"), 20, 1, "H", false) }, // under the yellow run
+    ];
+    expect(validateMove(b, move).ok).toBe(false);
+  });
+
+  it("allows multiple hedges in one turn when they connect to each other and the board", () => {
+    const b = new Board();
+    for (const c of orient(tile(1, "GGG"), 0, 0, "H", false)) b.place(c, 1);
+    // two laid hedges that touch each other (stacked rows) and anchor to the board
+    const move: PlacedTile[] = [
+      { tileId: 2, cells: orient(tile(2, "GGG"), 0, 1, "H", false) }, // links to the board
+      { tileId: 3, cells: orient(tile(3, "GGG"), 0, 2, "H", false) }, // touches tile 2
     ];
     expect(validateMove(b, move).ok).toBe(true);
   });

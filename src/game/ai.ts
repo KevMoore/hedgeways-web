@@ -97,6 +97,7 @@ const STYLES: Record<FarmerStyle, StyleCfg> = {
   landgrabber: { tile: 0.5, pen: 0.3, threat: 0.05 }, // greedy expansion, ignores risk
   steady: { threat: 1.2, pen: 0.18, tile: -0.1, jitter: 2e-4 }, // cautious, conservative, low variance
   wildcard: { jitter: 0.8, rand: 0.1 }, // unpredictable
+  scarecrow: { jitter: 1.1, rand: 0.16, tile: 0.5, pen: 0.25, threat: 0.05 }, // gleeful wildcard — bolder than Gus, grabs land on a whim
 };
 
 interface ResolvedWeights extends Weights {

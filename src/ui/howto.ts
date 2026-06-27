@@ -1,5 +1,5 @@
 import gsap from "gsap";
-import { COLOUR_HEX, COLOUR_HEX_DARK, FARMERS, HAND_SIZE, LIVESTOCK, MAX_LAY, PLAYER_KITS } from "../game/constants";
+import { COLOUR_HEX, COLOUR_HEX_DARK, HAND_SIZE, LIVESTOCK, MAX_LAY, PLAYER_KITS, PUBLIC_FARMERS } from "../game/constants";
 import { ACRES_PER_HERD } from "../game/scoring";
 import type { Colour } from "../game/types";
 import { mountFarmerPortrait } from "./farmer-portrait";
@@ -237,6 +237,20 @@ export function showHowTo(): void {
     ),
   );
 
+  // Join-up rule — every hedge laid in one turn must connect to another laid
+  // that same turn. Two all-green mini-boards: a hedgerow with two posts hanging
+  // off it, together (legal) vs. split to the far ends (illegal).
+  const joinedOk = grid(["GGGGG", "GG...", "GG...", "GG..."]);
+  const joinedBad = grid(["GGGGG", "G...G", "G...G", "G...G"]);
+  card.append(
+    section(
+      "🔗",
+      "Join up your turn",
+      "Lay more than one hedge in a turn and they must all join up — every hedge you add has to touch another you're laying this same turn. You can't drop two hedges in separate spots in one go. (After your first turn, the group must also reach the hedges already on the field.)",
+      diagram(joinedOk.node, "added together ✓", "   ", joinedBad.node, "added apart ✗"),
+    ),
+  );
+
   const enclose = encloseDemo();
   card.append(
     section(
@@ -325,7 +339,7 @@ export function showHowTo(): void {
     el("p", "ht-body", "Choose your farmer for their look. Each one also has a mind of its own — as an opponent, every farmer plays with a different personality."),
   );
   const fgrid = el("div", "ht-farmers");
-  for (const f of FARMERS) {
+  for (const f of PUBLIC_FARMERS) {
     const fcard = el("div", "ht-farmer");
     fcard.style.setProperty("--pc", f.colour);
     const pic = el("div", "ht-farmer-pic");
@@ -360,6 +374,29 @@ export function showHowTo(): void {
   }
   controls.append(list);
   card.append(controls);
+
+  // Hidden in the hedges — spell out the start-screen Easter eggs for anyone
+  // who got the cryptic teaser but couldn't crack it.
+  const secrets = el("section", "ht-section");
+  const sech = el("h3", "ht-head");
+  sech.append(el("span", "ht-emoji", "🥚"), document.createTextNode("Hidden in the hedges"));
+  secrets.append(
+    sech,
+    el("p", "ht-body", "A few secrets are tucked away on the start screen for the curious:"),
+  );
+  const seclist = el("ul", "ht-controls");
+  for (const [k, v] of [
+    ["🎺", "Click the livestock cards pig, cow, sheep, hen — in that order — for a barn dance."],
+    ["🌈", "The old code still works: ↑ ↑ ↓ ↓ ← → ← → B A."],
+    ["👀", "Feeling lazy? Type “watch” and let four bots play it out for you."],
+    ["🌾", "Tap the “Hedgeways” title seven times to unlock a secret ninth farmer."],
+  ] as [string, string][]) {
+    const li = el("li");
+    li.append(el("span", "ht-emoji", k), document.createTextNode(v));
+    seclist.append(li);
+  }
+  secrets.append(seclist);
+  card.append(secrets);
 
   const close = el("button", "btn primary ht-close", "Got it — let's play");
   card.append(close);

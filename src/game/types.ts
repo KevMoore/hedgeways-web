@@ -47,7 +47,8 @@ export type FarmerStyle =
   | "tactician"
   | "landgrabber"
   | "steady"
-  | "wildcard";
+  | "wildcard"
+  | "scarecrow";
 
 export interface Player {
   id: number;
