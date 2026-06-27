@@ -170,6 +170,34 @@ export class Scene {
   private autoFrame = false;
   private needsDraw = true;
   private lastDraw = 0; // perf.now() of the previous draw (for idle-animation throttle)
+  /** Per-cell foliage cache. drawHedge's leaf/twig/speck work is ~100 path ops
+   *  per cell and is fully deterministic in (cell, colour, mask, danger,
+   *  scale-bucket) — so committed opaque tiles render it ONCE into an in-memory
+   *  canvas and blit thereafter, instead of rebuilding it every frame. Keyed by
+   *  cell so a cell holds at most one tile; the stored `sig` triggers a re-render
+   *  when anything visual about that cell (or its neighbours) changes. Ghost and
+   *  rotation overlays pulse / drift / fade, so they bypass the cache and paint
+   *  directly. Entries for removed cells are pruned in syncBoard; cleared on reset. */
+  private hedgeCache = new Map<string, { sig: string; canvas: HTMLCanvasElement; pad: number; bucket: number }>();
+  /** The held ghost reshuffled its leaves every frame: it's painted at the
+   *  fractional drift position, so the foliage was re-seeded (and rebuilt) as it
+   *  glided under the finger. It's now blitted from this cache — keyed by look
+   *  only (colour, mask, valid, scale-bucket, segment), NOT position — so the
+   *  tile reads as one solid object while dragging and does no per-frame path
+   *  work. The live alpha pulse, scale pulse and sub-cell drift are applied at
+   *  blit, not baked in. Small + bounded (a handful of keys); cleared on reset. */
+  private ghostCache = new Map<string, { canvas: HTMLCanvasElement; pad: number }>();
+  /** Bleed room (in cells) around each cached tile so outward foliage — leaves
+   *  jut ~0.2 cells out, concave-corner clumps ~0.27 — isn't clipped at the tile
+   *  edge. Tiles overlap into this margin and composite in cell-iteration order,
+   *  exactly as the direct per-cell draws did. */
+  private static readonly HEDGE_PAD = 0.3;
+  /** Multiplicative zoom ladder for the cache. A settled camera sits on one rung
+   *  so it never re-renders; a full-range zoom crosses ~9 rungs rather than
+   *  regenerating every frame. Tiles are rendered at the rung scale and the blit
+   *  scales them to the live scale (also fixes the old "leaf count shifts with
+   *  zoom" reshuffle — counts are now tied to the rung, not the live scale). */
+  private static readonly HEDGE_BUCKETS = [18, 23, 29, 36, 45, 56, 70, 88, 110];
 
   tapHandler: ((x: number, y: number) => void) | null = null;
   hoverHandler: ((x: number, y: number) => void) | null = null;
@@ -318,6 +346,8 @@ export class Scene {
   reset(): void {
     this.cells.clear();
     this.enclosed.clear();
+    this.hedgeCache.clear();
+    this.ghostCache.clear();
     this.ghost = null;
     this.highlights.clear();
     this.flash.clear();
@@ -357,8 +387,9 @@ export class Scene {
       newCells.push({ x, y });
       if (!this.placedAt.has(k)) this.placedAt.set(k, now);
     }
-    // forget pop timers for cells no longer present (undo)
+    // forget pop timers + cached foliage tiles for cells no longer present (undo)
     for (const k of [...this.placedAt.keys()]) if (!cells.has(k)) this.placedAt.delete(k);
+    for (const k of [...this.hedgeCache.keys()]) if (!cells.has(k)) this.hedgeCache.delete(k);
     this.cells = new Map(cells);
     this.enclosed = new Set(enclosed);
     if (acres) this.acres = new Map(acres);
@@ -1521,7 +1552,7 @@ export class Scene {
       // Pulse a danger-marked cell red (engine rejected this placement at
       // Confirm). The pulse alternates ~2Hz so it's noticeable but not jarring.
       const danger = this.dangerCells.has(k) && Math.floor(now / 280) % 2 === 0;
-      this.drawHedge(x, y, cell.colour, 1, danger, pop, mask);
+      this.drawHedgeCached(x, y, cell.colour, danger, pop, mask);
     }
 
     // connect-flash: brief expanding ring on cells that "clicked" into place
@@ -1618,14 +1649,15 @@ export class Scene {
       const ghostAlpha = this.ghost.valid ? 0.5 + pulse * 0.25 : 0.4;
       const ghostScale = this.ghost.valid ? 0.97 + pulse * 0.06 : 1;
       const { ox, oy } = this.ghostFloat;
-      for (const c of this.ghost.cells) {
+      const valid = this.ghost.valid;
+      this.ghost.cells.forEach((c, seg) => {
         const mask =
           (hasHedge(c.x, c.y - 1) ? 1 : 0) |
           (hasHedge(c.x + 1, c.y) ? 2 : 0) |
           (hasHedge(c.x, c.y + 1) ? 4 : 0) |
           (hasHedge(c.x - 1, c.y) ? 8 : 0);
-        this.drawHedge(c.x + ox, c.y + oy, c.colour, ghostAlpha, !this.ghost.valid, ghostScale, mask);
-      }
+        this.drawGhostHedge(c.x, c.y, c.colour, valid, mask, seg, ghostAlpha, ghostScale, ox, oy);
+      });
     }
     // opponent presence (online) — SOLID colourless tile silhouettes where the
     // opponent is tentatively placing. Reads as a real hedge tile (so a 1x3 lay
@@ -1923,6 +1955,10 @@ export class Scene {
    * another hedge cell (1=N, 2=E, 4=S, 8=W); those sides skip their puffs so
    * adjacent cells flow into one continuous coloured strip.
    */
+  /** Live (uncached) hedge draw — used for the ghost preview and rotation
+   *  overlays, which change every frame (pulse / drift / fade) so caching them
+   *  would only thrash. Computes the diagonal-neighbour mask from the committed
+   *  board and delegates the actual painting to paintHedge. */
   private drawHedge(
     x: number,
     y: number,
@@ -1935,31 +1971,191 @@ export class Scene {
     const ctx = this.ctx;
     const [px, py] = this.worldToScreen(x, y);
     const s = this.scale;
-    const cx = px + s / 2;
-    const cy = py + s / 2;
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
+    const diagMask = this.diagMaskAt(x, y);
+    const preview = alpha < 1;
     if (pop !== 1) {
+      ctx.save();
+      const cx = px + s / 2;
+      const cy = py + s / 2;
+      ctx.translate(cx, cy);
+      ctx.scale(pop, pop);
+      ctx.translate(-cx, -cy);
+      this.paintHedge(ctx, px, py, s, colour, alpha, danger, hedgeMask, diagMask, x, y, preview);
+      ctx.restore();
+    } else {
+      this.paintHedge(ctx, px, py, s, colour, alpha, danger, hedgeMask, diagMask, x, y, preview);
+    }
+  }
+
+  /** Bit mask of which DIAGONAL neighbours hold a committed cell:
+   *  1=NE (x+1,y-1), 2=SE (x+1,y+1), 4=SW (x-1,y+1), 8=NW (x-1,y-1).
+   *  Used to decide which concave corners poke bare colour through the ribbon. */
+  private diagMaskAt(x: number, y: number): number {
+    return (
+      (this.cells.has(key(x + 1, y - 1)) ? 1 : 0) |
+      (this.cells.has(key(x + 1, y + 1)) ? 2 : 0) |
+      (this.cells.has(key(x - 1, y + 1)) ? 4 : 0) |
+      (this.cells.has(key(x - 1, y - 1)) ? 8 : 0)
+    );
+  }
+
+  /** Smallest zoom-ladder rung >= the given scale (clamped to the ladder ends). */
+  private scaleBucket(s: number): number {
+    const ladder = Scene.HEDGE_BUCKETS;
+    for (const b of ladder) if (s <= b) return b;
+    return ladder[ladder.length - 1];
+  }
+
+  /** Cached committed-tile draw: render the cell's foliage to an in-memory tile
+   *  once per (colour, mask, diag, danger, scale-bucket), then blit it. The blit
+   *  scales the rung-sized tile to the live scale and applies the placement pop. */
+  private drawHedgeCached(
+    x: number,
+    y: number,
+    colour: Colour,
+    danger: boolean,
+    pop: number,
+    hedgeMask: number,
+  ): void {
+    const diagMask = this.diagMaskAt(x, y);
+    const bucket = this.scaleBucket(this.scale);
+    const sig = `${colour}|${hedgeMask}|${diagMask}|${danger ? 1 : 0}|${bucket}`;
+    const ck = key(x, y);
+    let entry = this.hedgeCache.get(ck);
+    if (!entry || entry.sig !== sig) {
+      entry = this.renderHedgeTile(x, y, colour, danger, hedgeMask, diagMask, bucket, sig);
+      this.hedgeCache.set(ck, entry);
+    }
+    const ctx = this.ctx;
+    const [px, py] = this.worldToScreen(x, y);
+    const s = this.scale;
+    const dPad = entry.pad * s;
+    ctx.save();
+    if (pop !== 1) {
+      const cx = px + s / 2;
+      const cy = py + s / 2;
       ctx.translate(cx, cy);
       ctx.scale(pop, pop);
       ctx.translate(-cx, -cy);
     }
+    ctx.drawImage(entry.canvas, px - dPad, py - dPad, s + 2 * dPad, s + 2 * dPad);
+    ctx.restore();
+  }
 
-    // Solid colour panel. In danger mode at low alpha (ghost preview) we
+  /** Paint one cell's foliage into a fresh in-memory canvas at the rung scale,
+   *  padded so outward leaves aren't clipped. Returned tile is blitted by
+   *  drawHedgeCached. */
+  private renderHedgeTile(
+    x: number,
+    y: number,
+    colour: Colour,
+    danger: boolean,
+    hedgeMask: number,
+    diagMask: number,
+    bucket: number,
+    sig: string,
+  ): { sig: string; canvas: HTMLCanvasElement; pad: number; bucket: number } {
+    const pad = Scene.HEDGE_PAD;
+    const tileCss = bucket * (1 + 2 * pad);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(tileCss * this.dpr);
+    canvas.height = Math.ceil(tileCss * this.dpr);
+    const tctx = canvas.getContext("2d")!;
+    tctx.scale(this.dpr, this.dpr);
+    const o = pad * bucket; // cell's top-left within the padded tile
+    this.paintHedge(tctx, o, o, bucket, colour, 1, danger, hedgeMask, diagMask, x, y);
+    return { sig, canvas, pad, bucket };
+  }
+
+  /** Cached held-ghost segment. Rendered OPAQUE into a tile keyed by look alone
+   *  (seeded by segment index, not board position, so the leaves stay put while
+   *  the tile glides), then blitted with the live alpha pulse, scale pulse and
+   *  sub-cell drift applied at composite time. diagMask is 0 — a floating ghost
+   *  never fuses concave corners into the committed board (matches the old
+   *  behaviour, where the fractional position made every diagonal lookup miss). */
+  private drawGhostHedge(
+    gx: number,
+    gy: number,
+    colour: Colour,
+    valid: boolean,
+    mask: number,
+    seg: number,
+    alpha: number,
+    pulse: number,
+    ox: number,
+    oy: number,
+  ): void {
+    const bucket = this.scaleBucket(this.scale);
+    const gk = `${colour}|${mask}|${valid ? 1 : 0}|${bucket}|${seg}`;
+    let entry = this.ghostCache.get(gk);
+    if (!entry) {
+      const pad = Scene.HEDGE_PAD;
+      const tileCss = bucket * (1 + 2 * pad);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(tileCss * this.dpr);
+      canvas.height = Math.ceil(tileCss * this.dpr);
+      const tctx = canvas.getContext("2d")!;
+      tctx.scale(this.dpr, this.dpr);
+      const o = pad * bucket;
+      this.paintHedge(tctx, o, o, bucket, colour, 1, !valid, mask, 0, seg, 0, true);
+      entry = { canvas, pad };
+      this.ghostCache.set(gk, entry);
+    }
+    const ctx = this.ctx;
+    const [px, py] = this.worldToScreen(gx + ox, gy + oy);
+    const s = this.scale;
+    const dPad = entry.pad * s;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (pulse !== 1) {
+      const cx = px + s / 2;
+      const cy = py + s / 2;
+      ctx.translate(cx, cy);
+      ctx.scale(pulse, pulse);
+      ctx.translate(-cx, -cy);
+    }
+    ctx.drawImage(entry.canvas, px - dPad, py - dPad, s + 2 * dPad, s + 2 * dPad);
+    ctx.restore();
+  }
+
+  /** Pure painter: draws one hedge cell at (px,py) with cell size s into the
+   *  given context. Decoupled from the camera and the live board (diagonal
+   *  neighbours arrive as diagMask, the RNG seed as seedX/seedY) so it can paint
+   *  either straight to screen or into a cache tile. The placement pop is applied
+   *  by the caller, never here. */
+  private paintHedge(
+    ctx: CanvasRenderingContext2D,
+    px: number,
+    py: number,
+    s: number,
+    colour: Colour,
+    alpha: number,
+    danger: boolean,
+    hedgeMask: number,
+    diagMask: number,
+    seedX: number,
+    seedY: number,
+    preview = false,
+  ): void {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    // Solid colour panel. In danger on a translucent PREVIEW (the held ghost) we
     // wash it white so the red hedge reads as "this won't sit there"; for
     // fully-opaque danger flashes on placed tiles we keep the colour so the
-    // player can still identify their tile.
-    ctx.fillStyle = danger && alpha < 1 ? "#ffffff" : COLOUR_HEX[colour];
+    // player can still identify their tile. (`preview` is decoupled from the
+    // numeric alpha so a ghost tile can be rendered opaque into the cache and
+    // faded at blit — alpha must not gate the styling.)
+    ctx.fillStyle = danger && preview ? "#ffffff" : COLOUR_HEX[colour];
     ctx.fillRect(px, py, s, s);
 
     // Leafy mottling over the colour panel so a THICK hedge mass reads as dense
     // coloured foliage rather than a flat painted field (which looks like an
     // enclosed acre). Interior cells draw no perimeter ribbon, so without this
     // they'd be bare colour. Darker same-hue clumps keep the Qwirkle colour
-    // identity intact. Skip on ghost/danger previews (alpha < 1) to keep them clean.
-    if (alpha >= 1 && !danger) {
-      const leafRng = makeRng(hash(x, y) ^ 0x6d2b79f5);
+    // identity intact. Skip on ghost/danger previews to keep them clean.
+    if (!preview && !danger) {
+      const leafRng = makeRng(hash(seedX, seedY) ^ 0x6d2b79f5);
       ctx.fillStyle = COLOUR_HEX_DARK[colour];
       const clumps = Math.max(6, Math.round(s * 0.2));
       for (let i = 0; i < clumps; i++) {
@@ -1983,7 +2179,7 @@ export class Scene {
     // same-colour tiles) read as distinct hedges rather than one blended block.
     // Drawn only on the N and W internal edges so each shared seam is stroked
     // once, in a darker shade of the cell's own colour.
-    if (alpha >= 1 && !danger) {
+    if (!preview && !danger) {
       ctx.strokeStyle = hexA(COLOUR_HEX_DARK[colour], 0.5);
       ctx.lineWidth = Math.max(1, s * 0.045);
       ctx.beginPath();
@@ -2003,10 +2199,10 @@ export class Scene {
     // leafy ribbon (most visible at the inner elbows of L/T/+ shapes). Flag them
     // so we can patch each with a leaf clump below — and DON'T early-return on a
     // fully-interior cell that still has such an exposed corner.
-    const cNE = nH && eH && !this.cells.has(key(x + 1, y - 1));
-    const cSE = sH && eH && !this.cells.has(key(x + 1, y + 1));
-    const cSW = sH && wH && !this.cells.has(key(x - 1, y + 1));
-    const cNW = nH && wH && !this.cells.has(key(x - 1, y - 1));
+    const cNE = nH && eH && !(diagMask & 1);
+    const cSE = sH && eH && !(diagMask & 2);
+    const cSW = sH && wH && !(diagMask & 4);
+    const cNW = nH && wH && !(diagMask & 8);
     if (nH && eH && sH && wH && !(cNE || cSE || cSW || cNW)) {
       ctx.restore();
       return; // fully interior with no exposed corner: nothing more to draw
@@ -2034,7 +2230,7 @@ export class Scene {
     // (not round puffs) so the hedge reads as dense leaves. Each leaf is a
     // slightly larger dark oval under a body oval, giving a thin shadow rim
     // between leaves for depth. Positions jitter outward for a bumpy silhouette.
-    const rng = makeRng(hash(x, y));
+    const rng = makeRng(hash(seedX, seedY));
     const perSide = Math.max(7, Math.round(s * 0.25));
     const margin = s * 0.08;
     const leaf = (cxp: number, cyp: number, scale: number) => {
@@ -2093,7 +2289,7 @@ export class Scene {
     if (cNW) cornerClump(px, py);
 
     // Sun-catch: scattered lighter leaf specks for the leaves-in-light look.
-    const rng2 = makeRng(hash(x, y) ^ 0x5a7d);
+    const rng2 = makeRng(hash(seedX, seedY) ^ 0x5a7d);
     ctx.fillStyle = body === HEDGE_DANGER ? "rgba(255,205,165,0.6)" : "rgba(176,224,138,0.72)";
     const speck = (enabled: boolean, xAt: (t: number) => number, yAt: (t: number) => number) => {
       if (!enabled) return;
